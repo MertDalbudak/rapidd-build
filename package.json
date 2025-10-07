@@ -1,0 +1,63 @@
+{
+  "name": "@rapidd/build",
+  "version": "1.0.0",
+  "description": "Dynamic code generator that transforms Prisma schemas into Express.js CRUD APIs with PostgreSQL RLS-to-JavaScript translation",
+  "main": "index.js",
+  "bin": {
+    "rapidd": "./bin/cli.js"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepublishOnly": "echo 'Ready to publish'"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rapidd/build"
+  },
+  "bugs": {
+    "url": "https://github.com/rapidd/build/issues"
+  },
+  "homepage": "https://github.com/rapidd/build#readme",
+  "keywords": [
+    "rapidd",
+    "prisma",
+    "code-generation",
+    "orm",
+    "express",
+    "routes",
+    "rls",
+    "row-level-security",
+    "crud",
+    "api-generator",
+    "postgresql",
+    "mysql",
+    "database",
+    "security",
+    "access-control",
+    "authentication",
+    "authorization"
+  ],
+  "author": "Rapidd Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "index.js",
+    "README.md"
+  ],
+  "dependencies": {
+    "@prisma/client": "^5.0.0",
+    "commander": "^11.0.0",
+    "dotenv": "^16.0.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "prisma": "^5.0.0"
+  },
+  "peerDependencies": {
+    "@prisma/client": "^5.0.0"
+  }
+}
