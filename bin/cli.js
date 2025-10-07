@@ -16,6 +16,8 @@ program
   .description('Build model files from Prisma schema')
   .option('-s, --schema <path>', 'Path to Prisma schema file', process.env.PRISMA_SCHEMA_PATH || './prisma/schema.prisma')
   .option('-o, --output <path>', 'Output base directory', './')
+  .option('-m, --model <name>', 'Generate/update only specific model (e.g., "account", "user")')
+  .option('--only <component>', 'Generate only specific component: "model", "route", "rls", or "relationship"')
   .option('--user-table <name>', 'Name of the user table for RLS (default: auto-detect from user/users)')
   .action(async (options) => {
     try {

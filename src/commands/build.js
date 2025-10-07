@@ -303,11 +303,130 @@ module.exports = {prisma, Prisma, rls};
 }
 
 /**
+ * Update relationships.json for a specific model
+ */
+async function updateRelationshipsForModel(filteredModels, relationshipsPath, prismaClientPath, schemaPath, usedDMMF) {
+  let existingRelationships = {};
+
+  // Load existing relationships if file exists
+  if (fs.existsSync(relationshipsPath)) {
+    try {
+      existingRelationships = JSON.parse(fs.readFileSync(relationshipsPath, 'utf8'));
+    } catch (error) {
+      console.warn('Could not parse existing relationships.json, will create new');
+    }
+  }
+
+  // Generate relationships for the filtered model(s)
+  let newRelationships = {};
+  if (usedDMMF) {
+    // Use DMMF to get relationships for specific model
+    const { generateRelationshipsFromDMMF } = require('../generators/relationshipsGenerator');
+    const tempPath = relationshipsPath + '.tmp';
+    await generateRelationshipsFromDMMF(prismaClientPath, tempPath);
+    const allRelationships = JSON.parse(fs.readFileSync(tempPath, 'utf8'));
+    fs.unlinkSync(tempPath);
+
+    // Extract only the filtered model's relationships
+    for (const modelName of Object.keys(filteredModels)) {
+      if (allRelationships[modelName]) {
+        newRelationships[modelName] = allRelationships[modelName];
+      }
+    }
+  } else {
+    // Use schema parser
+    const { generateRelationshipsFromSchema } = require('../generators/relationshipsGenerator');
+    const tempPath = relationshipsPath + '.tmp';
+    generateRelationshipsFromSchema(schemaPath, tempPath);
+    const allRelationships = JSON.parse(fs.readFileSync(tempPath, 'utf8'));
+    fs.unlinkSync(tempPath);
+
+    // Extract only the filtered model's relationships
+    for (const modelName of Object.keys(filteredModels)) {
+      if (allRelationships[modelName]) {
+        newRelationships[modelName] = allRelationships[modelName];
+      }
+    }
+  }
+
+  // Merge with existing relationships
+  const updatedRelationships = { ...existingRelationships, ...newRelationships };
+
+  // Write back to file
+  fs.writeFileSync(relationshipsPath, JSON.stringify(updatedRelationships, null, 2));
+}
+
+/**
+ * Update rls.js for a specific model
+ */
+async function updateRLSForModel(filteredModels, rlsPath, datasource, userTable, relationships) {
+  const { generateRLS } = require('../generators/rlsGeneratorV2');
+
+  // Generate RLS for the filtered model
+  const tempPath = rlsPath + '.tmp';
+  await generateRLS(
+    filteredModels,
+    tempPath,
+    datasource.url,
+    datasource.isPostgreSQL,
+    userTable,
+    relationships
+  );
+
+  // Read the generated RLS for the specific model
+  const tempContent = fs.readFileSync(tempPath, 'utf8');
+  fs.unlinkSync(tempPath);
+
+  // Extract the model's RLS configuration
+  const modelName = Object.keys(filteredModels)[0];
+  const modelRlsMatch = tempContent.match(new RegExp(`${modelName}:\\s*\\{[\\s\\S]*?\\n    \\}(?=,|\\n)`));
+
+  if (!modelRlsMatch) {
+    throw new Error(`Could not extract RLS for model ${modelName}`);
+  }
+
+  const modelRls = modelRlsMatch[0];
+
+  // Read existing rls.js
+  if (fs.existsSync(rlsPath)) {
+    let existingContent = fs.readFileSync(rlsPath, 'utf8');
+
+    // Check if model already exists in RLS
+    const existingModelPattern = new RegExp(`${modelName}:\\s*\\{[\\s\\S]*?\\n    \\}(?=,|\\n)`);
+
+    if (existingModelPattern.test(existingContent)) {
+      // Replace existing model RLS
+      existingContent = existingContent.replace(existingModelPattern, modelRls);
+    } else {
+      // Add new model RLS before the closing of rls.model
+      existingContent = existingContent.replace(
+        /(\n};[\s]*\n[\s]*module\.exports)/,
+        `,\n    ${modelRls}\n};$1`
+      );
+    }
+
+    fs.writeFileSync(rlsPath, existingContent);
+    console.log(`✓ Updated RLS for model: ${modelName}`);
+  } else {
+    // If rls.js doesn't exist, create it with just this model
+    await generateRLS(
+      filteredModels,
+      rlsPath,
+      datasource.url,
+      datasource.isPostgreSQL,
+      userTable,
+      relationships
+    );
+  }
+}
+
+/**
  * Build models from Prisma schema
  * @param {Object} options - Build options
  * @param {string} options.schema - Path to Prisma schema file
  * @param {string} options.output - Output directory for generated models
- * @param {string} options.relationships - Path to relationships.json file
+ * @param {string} options.model - Optional: specific model to generate
+ * @param {string} options.only - Optional: specific component to generate
  */
 async function buildModels(options) {
   const schemaPath = path.resolve(process.cwd(), options.schema);
@@ -378,67 +497,120 @@ async function buildModels(options) {
 
   const { models, enums } = parsedData;
 
-  console.log(`Found ${Object.keys(models).length} models`);
+  // Filter models if --model option is provided
+  let filteredModels = models;
+  if (options.model) {
+    const modelName = options.model.toLowerCase();
+    const matchedModel = Object.keys(models).find(m => m.toLowerCase() === modelName);
+
+    if (!matchedModel) {
+      throw new Error(`Model "${options.model}" not found in schema. Available models: ${Object.keys(models).join(', ')}`);
+    }
+
+    filteredModels = { [matchedModel]: models[matchedModel] };
+    console.log(`Filtering to model: ${matchedModel}`);
+  }
+
+  console.log(`Found ${Object.keys(models).length} models${options.model ? ` (generating ${Object.keys(filteredModels).length})` : ''}`);
+
+  // Determine which components to generate
+  const shouldGenerate = {
+    model: !options.only || options.only === 'model',
+    route: !options.only || options.only === 'route',
+    rls: !options.only || options.only === 'rls',
+    relationship: !options.only || options.only === 'relationship'
+  };
+
+  // Validate --only option
+  if (options.only && !['model', 'route', 'rls', 'relationship'].includes(options.only)) {
+    throw new Error(`Invalid --only value "${options.only}". Must be one of: model, route, rls, relationship`);
+  }
 
   // Generate model files
-  generateAllModels(models, modelDir, modelJsPath);
+  if (shouldGenerate.model) {
+    generateAllModels(filteredModels, modelDir, modelJsPath);
 
-  // Generate src/Model.js (base Model class)
-  console.log('\nGenerating src/Model.js...');
-  generateBaseModelFile(modelJsPath);
+    // Generate src/Model.js (base Model class) - only if not filtering by model
+    if (!options.model) {
+      console.log('\nGenerating src/Model.js...');
+      generateBaseModelFile(modelJsPath);
+    }
+  }
 
-  // Generate rapidd/rapidd.js
-  console.log('Generating rapidd/rapidd.js...');
-  generateRapiddFile(rapiddJsPath);
+  // Generate rapidd/rapidd.js - only if not filtering by model
+  if (!options.model && !options.only) {
+    console.log('Generating rapidd/rapidd.js...');
+    generateRapiddFile(rapiddJsPath);
+  }
 
   // Generate relationships.json
-  console.log(`\nGenerating relationships.json...`);
+  if (shouldGenerate.relationship) {
+    console.log(`\nGenerating relationships.json...`);
 
-  try {
-    if (usedDMMF) {
-      await generateRelationshipsFromDMMF(prismaClientPath, relationshipsPath);
-    } else {
-      generateRelationshipsFromSchema(schemaPath, relationshipsPath);
+    try {
+      if (options.model) {
+        // Update only specific model in relationships.json
+        await updateRelationshipsForModel(filteredModels, relationshipsPath, prismaClientPath, schemaPath, usedDMMF);
+      } else {
+        // Generate all relationships
+        if (usedDMMF) {
+          await generateRelationshipsFromDMMF(prismaClientPath, relationshipsPath);
+        } else {
+          generateRelationshipsFromSchema(schemaPath, relationshipsPath);
+        }
+      }
+      console.log(`✓ Relationships file generated at: ${relationshipsPath}`);
+    } catch (error) {
+      console.error('Failed to generate relationships.json:', error.message);
+      console.log('Note: You may need to create relationships.json manually.');
     }
-    console.log(`✓ Relationships file generated at: ${relationshipsPath}`);
-  } catch (error) {
-    console.error('Failed to generate relationships.json:', error.message);
-    console.log('Note: You may need to create relationships.json manually.');
   }
 
   // Generate RLS configuration
-  console.log(`\nGenerating RLS configuration...`);
+  if (shouldGenerate.rls) {
+    console.log(`\nGenerating RLS configuration...`);
 
-  // Load relationships for Prisma filter building
-  let relationships = {};
-  try {
-    if (fs.existsSync(relationshipsPath)) {
-      relationships = JSON.parse(fs.readFileSync(relationshipsPath, 'utf8'));
+    // Load relationships for Prisma filter building
+    let relationships = {};
+    try {
+      if (fs.existsSync(relationshipsPath)) {
+        relationships = JSON.parse(fs.readFileSync(relationshipsPath, 'utf8'));
+      }
+    } catch (error) {
+      console.warn('Could not load relationships.json:', error.message);
     }
-  } catch (error) {
-    console.warn('Could not load relationships.json:', error.message);
-  }
 
-  try {
-    // Parse datasource from Prisma schema to get database URL
-    const datasource = parseDatasource(schemaPath);
+    try {
+      // Parse datasource from Prisma schema to get database URL
+      const datasource = parseDatasource(schemaPath);
 
-    await generateRLS(
-      models,
-      rlsPath,
-      datasource.url,
-      datasource.isPostgreSQL,
-      options.userTable,
-      relationships
-    );
-  } catch (error) {
-    console.error('Failed to generate RLS:', error.message);
-    console.log('Generating permissive RLS fallback...');
-    await generateRLS(models, rlsPath, null, false, options.userTable, relationships);
+      if (options.model) {
+        // Update only specific model in rls.js
+        await updateRLSForModel(filteredModels, rlsPath, datasource, options.userTable, relationships);
+      } else {
+        // Generate RLS for all models
+        await generateRLS(
+          models,
+          rlsPath,
+          datasource.url,
+          datasource.isPostgreSQL,
+          options.userTable,
+          relationships
+        );
+      }
+    } catch (error) {
+      console.error('Failed to generate RLS:', error.message);
+      if (!options.model) {
+        console.log('Generating permissive RLS fallback...');
+        await generateRLS(models, rlsPath, null, false, options.userTable, relationships);
+      }
+    }
   }
 
   // Generate routes
-  generateAllRoutes(models, routesDir);
+  if (shouldGenerate.route) {
+    generateAllRoutes(filteredModels, routesDir);
+  }
 
   return { models, enums };
 }

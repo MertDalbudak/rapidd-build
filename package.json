@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Dynamic code generator that transforms Prisma schemas into Express.js CRUD APIs with PostgreSQL RLS-to-JavaScript translation",
   "main": "index.js",
   "bin": {
@@ -12,12 +12,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/rapidd/build"
+    "url": "https://github.com/MertDalbudak/rapidd-build"
   },
   "bugs": {
-    "url": "https://github.com/rapidd/build/issues"
+    "url": "https://github.com/MertDalbudak/rapidd-build/issues"
   },
-  "homepage": "https://github.com/rapidd/build#readme",
+  "homepage": "https://github.com/MertDalbudak/rapidd-build#readme",
   "keywords": [
     "rapidd",
     "prisma",
