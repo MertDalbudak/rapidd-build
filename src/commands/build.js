@@ -12,7 +12,7 @@ const { generateAllRoutes } = require('../generators/routeGenerator');
  */
 function generateBaseModelFile(modelJsPath) {
   const content = `const { QueryBuilder, prisma } = require("./QueryBuilder");
-const {ErrorResponse} = require('./Api');
+const {ErrorResponse, getTranslation} = require('./Api');
 
 class Model {
     /**
@@ -50,7 +50,8 @@ class Model {
         sortBy = sortBy.trim();
         sortOrder = sortOrder.trim();
         if (!sortBy.includes('.') && this.fields[sortBy] == undefined) {
-            throw new ErrorResponse(\`Parameter sortBy '\${sortBy}' is not a valid field of \${this.constructor.name}\`, 400);
+            const message = getTranslation("invalid_sort_field", {sortBy, modelName: this.constructor.name});
+            throw new ErrorResponse(message, 400);
         }
 
         // Query the database using Prisma with filters, pagination, and limits
@@ -71,37 +72,40 @@ class Model {
      */
     _get = async (id, include, options = {}) =>{
         const {omit, ..._options} = options;
-        id = Number(id)
+        id = Number(id);
         // To determine if the record is inaccessible, either due to non-existence or insufficient permissions, two simultaneous queries are performed.
         const _response = this.prisma.findUnique({
             'where': {
-                'id': id,
-                ...this.getAccessFilter()
+                'id': id
             },
             'include': this.include(include),
             'omit': {...this._omit(), ...omit},
             ..._options
         });
 
-        const _checkExistence = this.prisma.findUnique({
+        const _checkPermission = this.prisma.findUnique({
             'where': {
-                'id': id
+                'id': id,
+                ...this.getAccessFilter()
             },
             'select': {
                 'id': true
             }
         });
 
-        const [response, checkExistence] = await Promise.all([_response, _checkExistence]);
-
-        if(response == null){
-            if(checkExistence == null){
-                throw new ErrorResponse("Record not found", 404);
+        const [response, checkPermission] = await Promise.all([_response, _checkPermission]);
+        if(response){
+            if(checkPermission){
+                if(response.id != checkExistence?.id){   // IN CASE access_filter CONTAINS id FIELD
+                    throw new ErrorResponse(getTranslation("no_permission"), 403);
+                }
             }
-            throw new ErrorResponse("No permission", 403);
+            else{
+                throw new ErrorResponse(getTranslation("no_permission"), 403);
+            }
         }
-        if(response.id != checkExistence?.id){   // IN CASE access_filter CONTAINS id FIELD
-            throw new ErrorResponse("No permission", 403);
+        else{
+            throw new ErrorResponse(getTranslation("record_not_found"), 404);
         }
         return response;
     }
@@ -276,6 +280,12 @@ class Model {
 module.exports = {Model, QueryBuilder, prisma};
 `;
 
+  // Ensure src directory exists
+  const srcDir = path.dirname(modelJsPath);
+  if (!fs.existsSync(srcDir)) {
+    fs.mkdirSync(srcDir, { recursive: true });
+  }
+
   fs.writeFileSync(modelJsPath, content);
   console.log('✓ Generated src/Model.js');
 }
@@ -359,10 +369,10 @@ async function updateRelationshipsForModel(filteredModels, relationshipsPath, pr
 /**
  * Update rls.js for a specific model
  */
-async function updateRLSForModel(filteredModels, rlsPath, datasource, userTable, relationships) {
+async function updateRLSForModel(filteredModels, allModels, rlsPath, datasource, userTable, relationships, debug = false) {
   const { generateRLS } = require('../generators/rlsGeneratorV2');
 
-  // Generate RLS for the filtered model
+  // Generate RLS for the filtered model (but pass all models for user table detection)
   const tempPath = rlsPath + '.tmp';
   await generateRLS(
     filteredModels,
@@ -370,7 +380,9 @@ async function updateRLSForModel(filteredModels, rlsPath, datasource, userTable,
     datasource.url,
     datasource.isPostgreSQL,
     userTable,
-    relationships
+    relationships,
+    debug,
+    allModels
   );
 
   // Read the generated RLS for the specific model
@@ -379,13 +391,52 @@ async function updateRLSForModel(filteredModels, rlsPath, datasource, userTable,
 
   // Extract the model's RLS configuration
   const modelName = Object.keys(filteredModels)[0];
-  const modelRlsMatch = tempContent.match(new RegExp(`${modelName}:\\s*\\{[\\s\\S]*?\\n    \\}(?=,|\\n)`));
 
-  if (!modelRlsMatch) {
-    throw new Error(`Could not extract RLS for model ${modelName}`);
+  // Find the start of the model definition
+  const modelStart = tempContent.indexOf(`${modelName}:`);
+  if (modelStart === -1) {
+    throw new Error(`Could not find model ${modelName} in generated RLS`);
   }
 
-  const modelRls = modelRlsMatch[0];
+  // Find the matching closing brace by counting braces
+  let braceCount = 0;
+  let inString = false;
+  let stringChar = null;
+  let i = tempContent.indexOf('{', modelStart);
+  const contentStart = i;
+
+  for (; i < tempContent.length; i++) {
+    const char = tempContent[i];
+    const prevChar = i > 0 ? tempContent[i - 1] : '';
+
+    // Handle string literals
+    if ((char === '"' || char === "'" || char === '`') && prevChar !== '\\') {
+      if (!inString) {
+        inString = true;
+        stringChar = char;
+      } else if (char === stringChar) {
+        inString = false;
+        stringChar = null;
+      }
+    }
+
+    if (!inString) {
+      if (char === '{') braceCount++;
+      if (char === '}') braceCount--;
+
+      if (braceCount === 0) {
+        // Found the closing brace
+        const modelRls = tempContent.substring(modelStart, i + 1);
+        break;
+      }
+    }
+  }
+
+  if (braceCount !== 0) {
+    throw new Error(`Could not extract RLS for model ${modelName} - unmatched braces`);
+  }
+
+  const modelRls = tempContent.substring(modelStart, i + 1);
 
   // Read existing rls.js
   if (fs.existsSync(rlsPath)) {
@@ -399,9 +450,10 @@ async function updateRLSForModel(filteredModels, rlsPath, datasource, userTable,
       existingContent = existingContent.replace(existingModelPattern, modelRls);
     } else {
       // Add new model RLS before the closing of rls.model
+      // Find the last closing brace of a model object and add comma after it
       existingContent = existingContent.replace(
-        /(\n};[\s]*\n[\s]*module\.exports)/,
-        `,\n    ${modelRls}\n};$1`
+        /(\n    \})\n(\};)/,
+        `$1,\n    ${modelRls}\n$2`
       );
     }
 
@@ -415,7 +467,9 @@ async function updateRLSForModel(filteredModels, rlsPath, datasource, userTable,
       datasource.url,
       datasource.isPostgreSQL,
       userTable,
-      relationships
+      relationships,
+      debug,
+      allModels
     );
   }
 }
@@ -529,16 +583,16 @@ async function buildModels(options) {
   // Generate model files
   if (shouldGenerate.model) {
     generateAllModels(filteredModels, modelDir, modelJsPath);
-
-    // Generate src/Model.js (base Model class) - only if not filtering by model
-    if (!options.model) {
-      console.log('\nGenerating src/Model.js...');
-      generateBaseModelFile(modelJsPath);
-    }
   }
 
-  // Generate rapidd/rapidd.js - only if not filtering by model
-  if (!options.model && !options.only) {
+  // Generate src/Model.js (base Model class) if it doesn't exist
+  if (!fs.existsSync(modelJsPath)) {
+    console.log('\nGenerating src/Model.js...');
+    generateBaseModelFile(modelJsPath);
+  }
+
+  // Generate rapidd/rapidd.js if it doesn't exist
+  if (!fs.existsSync(rapiddJsPath)) {
     console.log('Generating rapidd/rapidd.js...');
     generateRapiddFile(rapiddJsPath);
   }
@@ -586,7 +640,7 @@ async function buildModels(options) {
 
       if (options.model) {
         // Update only specific model in rls.js
-        await updateRLSForModel(filteredModels, rlsPath, datasource, options.userTable, relationships);
+        await updateRLSForModel(filteredModels, models, rlsPath, datasource, options.userTable, relationships, options.debug);
       } else {
         // Generate RLS for all models
         await generateRLS(
@@ -595,14 +649,15 @@ async function buildModels(options) {
           datasource.url,
           datasource.isPostgreSQL,
           options.userTable,
-          relationships
+          relationships,
+          options.debug
         );
       }
     } catch (error) {
       console.error('Failed to generate RLS:', error.message);
       if (!options.model) {
         console.log('Generating permissive RLS fallback...');
-        await generateRLS(models, rlsPath, null, false, options.userTable, relationships);
+        await generateRLS(models, rlsPath, null, false, options.userTable, relationships, options.debug);
       }
     }
   }

@@ -7,11 +7,9 @@ const path = require('path');
  * @returns {string} - Generated route code
  */
 function generateRouteFile(modelName) {
-  const modelNameLower = modelName.toLowerCase();
   const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
 
   return `const router = require('express').Router();
-const {Api, ErrorResponse} = require('../../../src/Api');
 const {${className}, QueryBuilder, prisma} = require('../../../src/Model/${className}');
 
 router.all('*', async (req, res, next) => {
@@ -20,13 +18,12 @@ router.all('*', async (req, res, next) => {
         next();
     }
     else{
-        res.status(401).send({'status_code': res.statusCode, 'message': "No valid session"});
+        return res.sendError(401, req.getTranslation("no_valid_session"));
     }
 });
 
 // GET ALL
 router.get('/', async function(req, res) {
-    let response, status_code = 200;
     try {
         const { q = {}, include = "", limit = 25, offset = 0, sortBy = "id", sortOrder = "asc" } = req.query;
 
@@ -34,67 +31,64 @@ router.get('/', async function(req, res) {
         const _count = req.${className}.count(q);
         const [data, count] = await Promise.all([_data, _count]);
 
-        response = Api.getListResponseBody(data, {'take': req.${className}.take(Number(limit)), 'skip': req.${className}.skip(Number(offset)), 'total': count});
+        return res.sendList(data, {'take': req.${className}.take(Number(limit)), 'skip': req.${className}.skip(Number(offset)), 'total': count});
     }
     catch(error){
-        response = QueryBuilder.errorHandler(error);
-        status_code = response.status_code;
+        const response = QueryBuilder.errorHandler(error);
+        return res.status(response.status_code).send(response);
     }
-    res.status(status_code).send(response);
 });
 
 // GET BY ID
 router.get('/:id', async function(req, res) {
-    let response, status_code = 200;
     try{
         const { include = ""} = req.query;
-        response = await req.${className}.get(req.params.id, include);
+        const response = await req.${className}.get(req.params.id, include);
+        return res.json(response);
     }
     catch(error){
-        response = QueryBuilder.errorHandler(error);
-        status_code = response.status_code;
+        const response = QueryBuilder.errorHandler(error);
+        return res.status(response.status_code).send(response);
     }
-    res.status(status_code).send(response);
 });
 
 // CREATE
 router.post('/', async function(req, res) {
-    let response, status_code = 201, payload = req.body;
+    const payload = req.body;
     try{
-        response = await req.${className}.create(payload);
+        const response = await req.${className}.create(payload);
+        return res.status(201).json(response);
     }
     catch(error){
-        response = QueryBuilder.errorHandler(error, payload);
-        status_code = response.status_code;
+        const response = QueryBuilder.errorHandler(error, payload);
+        return res.status(response.status_code).send(response);
     }
-    res.status(status_code).send(response);
 });
 
 // UPDATE
 router.patch('/:id', async function(req, res) {
-    let response, status_code = 200, payload = req.body;
+    const payload = req.body;
     try{
-        response = await req.${className}.update(req.params.id, payload);
+        const response = await req.${className}.update(req.params.id, payload);
+        return res.json(response);
     }
     catch(error){
-        response = QueryBuilder.errorHandler(error, payload);
-        status_code = response.status_code;
+        const response = QueryBuilder.errorHandler(error, payload);
+        return res.status(response.status_code).send(response);
     }
-    res.status(status_code).send(response);
 });
 
 // DELETE
 router.delete('/:id', async (req, res)=>{
-    let response, status_code = 200;
     try{
         await req.${className}.delete(req.params.id);
-        response = {'status_code': status_code, 'message': "${className} successfully deleted"}
+        const message = req.getTranslation("object_deleted_successfully", {modelName: "${className}"});
+        return res.sendResponse(200, message);
     }
     catch(error){
-        response = QueryBuilder.errorHandler(error);
-        status_code = response.status_code;
+        const response = QueryBuilder.errorHandler(error);
+        return res.status(response.status_code).send(response);
     }
-    res.status(status_code).send(response);
 });
 
 module.exports = router;

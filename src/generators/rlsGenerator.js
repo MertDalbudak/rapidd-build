@@ -259,7 +259,7 @@ function generateFilter(policies, expressionField) {
  * @param {boolean} isPostgreSQL - Whether database is PostgreSQL
  * @param {string} userTableOption - User-specified table name
  */
-async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTableOption) {
+async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTableOption, debug = false) {
   const userTable = detectUserTable(models, userTableOption);
   const modelNames = Object.keys(models);
 
@@ -277,11 +277,13 @@ async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTa
       functionAnalysis = await analyzeFunctions(databaseUrl);
       console.log(`✓ Analyzed ${Object.keys(functionAnalysis.functionMappings).length} PostgreSQL functions`);
 
-      // Save function analysis for debugging/manual adjustment
-      const configPath = path.join(path.dirname(outputPath), 'rls-mappings.json');
-      const mappingConfig = generateMappingConfig(functionAnalysis);
-      fs.writeFileSync(configPath, JSON.stringify(mappingConfig, null, 2));
-      console.log(`✓ Function mappings saved to ${configPath}`);
+      // Save function analysis for debugging/manual adjustment (only if --debug flag is set)
+      if (debug) {
+        const configPath = path.join(path.dirname(outputPath), 'rls-mappings.json');
+        const mappingConfig = generateMappingConfig(functionAnalysis);
+        fs.writeFileSync(configPath, JSON.stringify(mappingConfig, null, 2));
+        console.log(`✓ Function mappings saved to ${configPath}`);
+      }
     } catch (error) {
       console.warn(`⚠ Could not analyze functions: ${error.message}`);
     }

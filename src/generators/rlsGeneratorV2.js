@@ -285,8 +285,10 @@ function buildConditionalFilter(filtersWithRoles) {
 /**
  * Generate complete rls.js file
  */
-async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTableOption, relationships = {}) {
-  const userTable = detectUserTable(models, userTableOption);
+async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTableOption, relationships = {}, debug = false, allModels = null) {
+  // Use allModels for user table detection if provided (when filtering by model)
+  const modelsForUserDetection = allModels || models;
+  const userTable = detectUserTable(modelsForUserDetection, userTableOption);
   const modelNames = Object.keys(models);
 
   let policies = {};
@@ -313,11 +315,13 @@ async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTa
         relationships
       );
 
-      // Save function analysis for debugging
-      const configPath = path.join(path.dirname(outputPath), 'rls-mappings.json');
-      const mappingConfig = generateMappingConfig(functionAnalysis);
-      fs.writeFileSync(configPath, JSON.stringify(mappingConfig, null, 2));
-      console.log(`✓ Function mappings saved to ${configPath}`);
+      // Save function analysis for debugging (only if --debug flag is set)
+      if (debug) {
+        const configPath = path.join(path.dirname(outputPath), 'rls-mappings.json');
+        const mappingConfig = generateMappingConfig(functionAnalysis);
+        fs.writeFileSync(configPath, JSON.stringify(mappingConfig, null, 2));
+        console.log(`✓ Function mappings saved to ${configPath}`);
+      }
 
       // Also add user context requirements as a comment in rls.js
       if (Object.keys(functionAnalysis.userContextRequirements).length > 0) {

@@ -19,6 +19,7 @@ program
   .option('-m, --model <name>', 'Generate/update only specific model (e.g., "account", "user")')
   .option('--only <component>', 'Generate only specific component: "model", "route", "rls", or "relationship"')
   .option('--user-table <name>', 'Name of the user table for RLS (default: auto-detect from user/users)')
+  .option('--debug', 'Enable debug mode (generates rls-mappings.json)')
   .action(async (options) => {
     try {
       await buildModels(options);
