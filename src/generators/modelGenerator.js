@@ -12,21 +12,10 @@ function generateModelFile(modelName, modelInfo) {
   const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
 
   return `const {Model, QueryBuilder, prisma} = require('../Model');
-const {rls} = require('../../rapidd/rapidd');
 
 class ${className} extends Model {
     constructor(options){
-        super('${modelName}', options);
-    }
-
-    static queryBuilder = new QueryBuilder('${modelName}', rls.model.${modelName} || {});
-
-    static getAccessFilter(user) {
-        return rls.model.${modelName}?.getAccessFilter?.(user) || {};
-    }
-
-    static hasAccess(data, user) {
-        return rls.model.${modelName}?.hasAccess?.(data, user) || true;
+        super('${className}', options);
     }
 
     /**

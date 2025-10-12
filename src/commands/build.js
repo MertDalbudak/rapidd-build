@@ -12,7 +12,8 @@ const { generateAllRoutes } = require('../generators/routeGenerator');
  */
 function generateBaseModelFile(modelJsPath) {
   const content = `const { QueryBuilder, prisma } = require("./QueryBuilder");
-const {ErrorResponse, getTranslation} = require('./Api');
+const {rls} = require('../../rapidd/rapidd');
+const {ErrorResponse} = require('./Api');
 
 class Model {
     /**
@@ -21,17 +22,23 @@ class Model {
          */
     constructor(name, options){
         this.modelName = name;
+        this.queryBuilder = new QueryBuilder(name);
+        this.rls = rls.model[name] || {};
         this.options = options || {}
         this.user = this.options.user || {'id': 1, 'role': 'application'};
         this.user_id = this.user ? this.user.id : null;
     }
 
-    _select = (fields) => this.constructor.queryBuilder.select(fields);
-    _filter = (q) => this.constructor.queryBuilder.filter(q);
-    _include = (include) => this.constructor.queryBuilder.include(include, this.user);
-    _getAccessFilter = () => this.constructor.getAccessFilter(this.user);
-    _hasAccess = (data) => this.constructor.hasAccess(data, this.user) || false;
-    _omit = () => this.constructor.queryBuilder.omit(this.user);
+    _select = (fields) => this.queryBuilder.select(fields);
+    _filter = (q) => this.queryBuilder.filter(q);
+    _include = (include) => this.queryBuilder.include(include, this.user);
+    // RLS METHODS
+    _canCreate = () => this.rls.canCreate?.(this.user) || false;
+    _hasAccess = (data) => this.rls.hasAccess?.(data, this.user) || false;
+    _getAccessFilter = () => this.rls.getAccessFilter?.(this.user);
+    _getUpdateFilter = () => this.rls.getUpdateFilter?.(this.user);
+    _getDeleteFilter = () => this.rls.getDeleteFilter?.(this.user);
+    _omit = () => this.queryBuilder.omit(this.user);
 
     /**
      *
@@ -50,8 +57,7 @@ class Model {
         sortBy = sortBy.trim();
         sortOrder = sortOrder.trim();
         if (!sortBy.includes('.') && this.fields[sortBy] == undefined) {
-            const message = getTranslation("invalid_sort_field", {sortBy, modelName: this.constructor.name});
-            throw new ErrorResponse(message, 400);
+            throw new ErrorResponse(400, "invalid_sort_field", {sortBy, modelName: this.constructor.name});
         }
 
         // Query the database using Prisma with filters, pagination, and limits
@@ -114,8 +120,13 @@ class Model {
      * @returns {Promise<Object>}
      */
     _create = async (data, options = {}) => {
+        // CHECK CREATE PERMISSION
+        if (!this.canCreate()) {
+            throw new ErrorResponse(403, "no_permission_to_create");
+        }
+
         // VALIDATE PASSED FIELDS AND RELATIONSHIPS
-        this.constructor.queryBuilder.create(data, this.user_id);
+        this.queryBuilder.create(data, this.user_id);
 
         // CREATE
         return await this.prisma.create({
@@ -132,11 +143,32 @@ class Model {
      */
     _update = async (id, data, options = {}) => {
         id = Number(id);
-        // GET DATA FIRST
+
+        // CHECK UPDATE PERMISSION
+        const updateFilter = this.getUpdateFilter();
+        if (updateFilter === false) {
+            throw new ErrorResponse(403, "no_permission_to_update");
+        }
+
+        // GET DATA FIRST (also checks read access)
         const current_data = await this._get(id, "ALL");
 
+        // If updateFilter is not empty, verify the record matches the filter
+        if (Object.keys(updateFilter).length > 0) {
+            const canUpdate = await this.prisma.findUnique({
+                'where': {
+                    'id': id,
+                    ...updateFilter
+                },
+                'select': { 'id': true }
+            });
+            if (!canUpdate) {
+                throw new ErrorResponse(403, "no_permission_to_update");
+            }
+        }
+
         // VALIDATE PASSED FIELDS AND RELATIONSHIPS
-        this.constructor.queryBuilder.update(id, data, this.user_id);
+        this.queryBuilder.update(id, data, this.user_id);
         return await this.prisma.update({
             'where': {
                 'id': id
@@ -163,8 +195,30 @@ class Model {
      * @returns {Promise<Object>}
      */
     _delete = async (id, options = {}) => {
-        // GET DATA FIRST
+        id = Number(id);
+
+        // CHECK DELETE PERMISSION
+        const deleteFilter = this.getDeleteFilter();
+        if (deleteFilter === false) {
+            throw new ErrorResponse(403, "no_permission_to_delete");
+        }
+
+        // GET DATA FIRST (also checks read access)
         const current_data = await this._get(id);
+
+        // If deleteFilter is not empty, verify the record matches the filter
+        if (Object.keys(deleteFilter).length > 0) {
+            const canDelete = await this.prisma.findUnique({
+                'where': {
+                    'id': id,
+                    ...deleteFilter
+                },
+                'select': { 'id': true }
+            });
+            if (!canDelete) {
+                throw new ErrorResponse(403, "no_permission_to_delete");
+            }
+        }
 
         return await this.prisma.delete({
             'where': {
@@ -233,10 +287,10 @@ class Model {
         return this._include(include);
     }
     sort(sortBy, sortOrder) {
-        return this.constructor.queryBuilder.sort(sortBy, sortOrder);
+        return this.queryBuilder.sort(sortBy, sortOrder);
     }
     take(limit){
-        return this.constructor.queryBuilder.take(Number(limit));
+        return this.queryBuilder.take(Number(limit));
     }
     skip(offset){
         const parsed = parseInt(offset);
@@ -265,6 +319,39 @@ class Model {
      */
     hasAccess(data) {
         return this.user.role == "application" ? true : this._hasAccess(data, this.user);
+    }
+
+    /**
+     * Check if user can create records
+     * @returns {boolean}
+     */
+    canCreate() {
+        if(this.user.role == "application") return true;
+        return this._canCreate();
+    }
+
+    /**
+     * Get update filter for RLS
+     * @returns {Object|false}
+     */
+    getUpdateFilter(){
+        const filter = this._getUpdateFilter();
+        if(this.user.role == "application" || filter == true){
+            return {};
+        }
+        return filter;
+    }
+
+    /**
+     * Get delete filter for RLS
+     * @returns {Object|false}
+     */
+    getDeleteFilter(){
+        const filter = this._getDeleteFilter();
+        if(this.user.role == "application" || filter == true){
+            return {};
+        }
+        return filter;
     }
 
     set modelName (name){
