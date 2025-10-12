@@ -13,6 +13,23 @@ function convertToJavaScript(sql, dataVar = 'data', userVar = 'user') {
 
   sql = sql.trim();
 
+  // Strip outer parentheses if they wrap the entire expression
+  if (sql.startsWith('(') && sql.endsWith(')')) {
+    let depth = 0;
+    let matchesOuter = true;
+    for (let i = 0; i < sql.length; i++) {
+      if (sql[i] === '(') depth++;
+      if (sql[i] === ')') depth--;
+      if (depth === 0 && i < sql.length - 1) {
+        matchesOuter = false;
+        break;
+      }
+    }
+    if (matchesOuter) {
+      sql = sql.substring(1, sql.length - 1).trim();
+    }
+  }
+
   // Normalize whitespace
   sql = sql.replace(/\s+/g, ' ').replace(/\n/g, ' ');
 
@@ -48,8 +65,8 @@ function convertToJavaScript(sql, dataVar = 'data', userVar = 'user') {
     return `[${arrayValues}].includes(${userVar}?.${userProperty})`;
   }
 
-  // Handle field = function() comparisons
-  const funcCompareMatch = sql.match(/(\w+)\s*=\s*(\w+)\s*\([^)]*\)/i);
+  // Handle field = function() comparisons (with or without quotes)
+  const funcCompareMatch = sql.match(/(?:"?(\w+)"?)\s*=\s*(\w+)\s*\([^)]*\)/i);
   if (funcCompareMatch) {
     const field = funcCompareMatch[1];
     const funcName = funcCompareMatch[2];
@@ -60,7 +77,7 @@ function convertToJavaScript(sql, dataVar = 'data', userVar = 'user') {
   }
 
   // Handle field = (current_setting(...))
-  const currentSettingMatch = sql.match(/(\w+)\s*=\s*\(\s*current_setting\s*\(\s*'([^']+)'/i);
+  const currentSettingMatch = sql.match(/(?:"?(\w+)"?)\s*=\s*\(\s*current_setting\s*\(\s*'([^']+)'/i);
   if (currentSettingMatch) {
     const field = currentSettingMatch[1];
     const setting = currentSettingMatch[2];
@@ -68,6 +85,14 @@ function convertToJavaScript(sql, dataVar = 'data', userVar = 'user') {
     // Map setting to user property
     const userProperty = mapSettingToUserProperty(setting);
     return `${dataVar}?.${field} === ${userVar}?.${userProperty}`;
+  }
+
+  // Handle field = literal value (true, false, numbers, strings)
+  const literalMatch = sql.match(/(?:"?(\w+)"?)\s*=\s*(true|false|\d+|'[^']+')/i);
+  if (literalMatch) {
+    const field = literalMatch[1];
+    const value = literalMatch[2];
+    return `${dataVar}?.${field} === ${value}`;
   }
 
   // Handle EXISTS subqueries
@@ -80,6 +105,7 @@ function convertToJavaScript(sql, dataVar = 'data', userVar = 'user') {
   if (sql.toLowerCase() === 'false') return 'false';
 
   // Unhandled pattern
+  console.warn(`⚠ Unhandled RLS pattern: ${sql}`);
   return `true /* Unhandled RLS pattern: ${sql.substring(0, 60)}... */`;
 }
 

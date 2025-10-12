@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Dynamic code generator that transforms Prisma schemas into Express.js CRUD APIs with PostgreSQL RLS-to-JavaScript translation",
   "main": "index.js",
   "bin": {

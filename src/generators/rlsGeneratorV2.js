@@ -32,7 +32,7 @@ function detectUserTable(models, userTableOption) {
 /**
  * Extract RLS policies from PostgreSQL
  */
-async function extractPostgreSQLPolicies(databaseUrl, modelNames) {
+async function extractPostgreSQLPolicies(databaseUrl, models) {
   const client = new Client({ connectionString: databaseUrl });
 
   try {
@@ -40,8 +40,11 @@ async function extractPostgreSQLPolicies(databaseUrl, modelNames) {
 
     const policies = {};
 
-    // Initialize all models with empty policies
-    for (const modelName of modelNames) {
+    // Create mapping from database table name to model name
+    const tableToModelMap = {};
+    for (const [modelName, modelData] of Object.entries(models)) {
+      const dbName = modelData.dbName || modelName.toLowerCase();
+      tableToModelMap[dbName] = modelName;
       policies[modelName] = [];
     }
 
@@ -60,11 +63,13 @@ async function extractPostgreSQLPolicies(databaseUrl, modelNames) {
       ORDER BY tablename, policyname
     `);
 
-    // Group policies by table
+    // Group policies by model (using table to model mapping)
     for (const row of result.rows) {
       const tableName = row.tablename;
-      if (policies[tableName] !== undefined) {
-        policies[tableName].push({
+      const modelName = tableToModelMap[tableName];
+
+      if (modelName && policies[modelName] !== undefined) {
+        policies[modelName].push({
           name: row.policyname,
           permissive: row.permissive === 'PERMISSIVE',
           roles: row.roles,
@@ -165,14 +170,22 @@ function generateFunction(policies, expressionField, converter, modelName) {
     if (expr) {
       try {
         const jsExpr = converter.convertToJavaScript(expr, 'data', 'user', modelName);
+        console.log(`✓ Policy '${policy.name}': ${expr.substring(0, 50)}... -> ${jsExpr.substring(0, 80)}`);
         conditions.push(jsExpr);
       } catch (e) {
-        conditions.push(`true /* Error: ${e.message} */`);
+        console.warn(`⚠ Failed to convert RLS policy '${policy.name}' for ${modelName}: ${e.message}`);
+        console.warn(`  SQL: ${expr}`);
+        conditions.push(`true /* TODO: Manual conversion needed for policy '${policy.name}' */`);
       }
     }
   }
 
   if (conditions.length === 0) {
+    return 'return true;';
+  }
+
+  // If any condition is 'true', the entire expression is true
+  if (conditions.some(c => c === 'true' || c.startsWith('true /*'))) {
     return 'return true;';
   }
 
@@ -208,7 +221,9 @@ function generateFilter(policies, expressionField, converter, modelName) {
           hasDataFilter: prismaFilter !== '{}'
         });
       } catch (e) {
-        // On error, skip filter
+        console.warn(`⚠ Failed to convert RLS filter policy '${policy.name}' for ${modelName}: ${e.message}`);
+        console.warn(`  SQL: ${expr}`);
+        // On error, skip filter (fail-safe - no access)
       }
     }
   }
@@ -341,7 +356,7 @@ ${Object.entries(functionAnalysis.userContextRequirements)
 
     // Step 2: Extract policies
     try {
-      policies = await extractPostgreSQLPolicies(databaseUrl, modelNames);
+      policies = await extractPostgreSQLPolicies(databaseUrl, models);
       const totalPolicies = Object.values(policies).reduce((sum, p) => sum + p.length, 0);
       console.log(`✓ Extracted ${totalPolicies} RLS policies from PostgreSQL`);
     } catch (error) {

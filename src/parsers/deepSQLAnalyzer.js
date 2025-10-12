@@ -180,8 +180,8 @@ class DeepSQLAnalyzer {
    * Extract direct field comparisons
    */
   extractDirectComparisons(sql, analysis) {
-    // Pattern: field = 'value'
-    const stringPattern = /(\w+)\s*=\s*'([^']+)'/gi;
+    // Pattern: field = 'value' (with or without quotes on field name)
+    const stringPattern = /(?:"?(\w+)"?)\s*=\s*'([^']+)'/gi;
     let match;
     while ((match = stringPattern.exec(sql)) !== null) {
       const field = match[1];
@@ -200,8 +200,8 @@ class DeepSQLAnalyzer {
       });
     }
 
-    // Pattern: field = number
-    const numberPattern = /(\w+)\s*=\s*(\d+)(?!\s*\))/gi;
+    // Pattern: field = number (with or without quotes on field name)
+    const numberPattern = /(?:"?(\w+)"?)\s*=\s*(\d+)(?!\s*\))/gi;
     while ((match = numberPattern.exec(sql)) !== null) {
       const field = match[1];
       const value = match[2];
@@ -219,8 +219,22 @@ class DeepSQLAnalyzer {
       });
     }
 
+    // Pattern: field = true/false (with or without quotes on field name)
+    const booleanPattern = /(?:"?(\w+)"?)\s*=\s*(true|false)/gi;
+    while ((match = booleanPattern.exec(sql)) !== null) {
+      const field = match[1];
+      const value = match[2].toLowerCase();
+
+      analysis.filters.push({
+        type: 'equal',
+        field: field,
+        value: value,
+        prisma: `{ ${field}: ${value} }`
+      });
+    }
+
     // Pattern: field IS NULL
-    const isNullPattern = /(\w+)\s+IS\s+NULL/gi;
+    const isNullPattern = /(?:"?(\w+)"?)\s+IS\s+NULL/gi;
     while ((match = isNullPattern.exec(sql)) !== null) {
       analysis.filters.push({
         type: 'is_null',
@@ -244,10 +258,10 @@ class DeepSQLAnalyzer {
    * Extract function-based comparisons
    */
   extractFunctionComparisons(sql, analysis) {
-    // Pattern: field = function()
+    // Pattern: field = function() (with or without quotes on field name)
     const patterns = [
-      /(\w+)\s*=\s*([\w.]+)\s*\(\s*\)/gi,  // field = function()
-      /([\w.]+)\s*\(\s*\)\s*=\s*(\w+)/gi   // function() = field
+      /(?:"?(\w+)"?)\s*=\s*([\w.]+)\s*\(\s*\)/gi,  // field = function()
+      /([\w.]+)\s*\(\s*\)\s*=\s*(?:"?(\w+)"?)/gi   // function() = field
     ];
 
     // Normalize dots in function names for lookup

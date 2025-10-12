@@ -46,6 +46,7 @@ function parsePrismaSchema(schemaPath) {
   for (const { name, body } of modelBlocks) {
     const fields = parseModelFields(body);
     const compositeKeyFields = parseCompositeKey(body);
+    const dbName = parseMapDirective(body);
 
     // Mark composite key fields with isId
     if (compositeKeyFields) {
@@ -60,7 +61,8 @@ function parsePrismaSchema(schemaPath) {
       name,
       fields,
       relations: parseModelRelations(body),
-      compositeKey: compositeKeyFields
+      compositeKey: compositeKeyFields,
+      dbName: dbName || name.toLowerCase() // Default to lowercase model name
     };
   }
 
@@ -88,6 +90,25 @@ function parseCompositeKey(modelBody) {
     if (match) {
       const fieldsStr = match[1];
       return fieldsStr.split(',').map(f => f.trim());
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Parse @@map directive to get database table name
+ * @param {string} modelBody - The content inside model braces
+ * @returns {string|null} - Database table name, or null if no @@map directive
+ */
+function parseMapDirective(modelBody) {
+  const lines = modelBody.split('\n').map(line => line.trim());
+
+  for (const line of lines) {
+    // Match @@map("table_name") or @@map('table_name')
+    const match = line.match(/^@@map\(["']([^"']+)["']\)/);
+    if (match) {
+      return match[1];
     }
   }
 
@@ -206,7 +227,8 @@ async function parsePrismaDMMF(prismaClientPath) {
         name: model.name,
         fields: {},
         relations: [],
-        compositeKey
+        compositeKey,
+        dbName: model.dbName || model.name.toLowerCase() // Use dbName from DMMF or default to lowercase
       };
 
       for (const field of model.fields) {

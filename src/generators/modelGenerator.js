@@ -150,7 +150,7 @@ function generateAllModels(models, modelDir, modelJsPath) {
 
   // Copy rapidd.js to output if it exists
   const sourceRapiddJs = path.join(process.cwd(), 'rapidd', 'rapidd.js');
-  const outputRapiddDir = path.dirname(modelDir.replace(/src[\/\\]Model$/, 'rapidd'));
+  const outputRapiddDir = modelDir.replace(/src[\/\\]Model$/, 'rapidd');
   const outputRapiddJs = path.join(outputRapiddDir, 'rapidd.js');
 
   if (fs.existsSync(sourceRapiddJs)) {

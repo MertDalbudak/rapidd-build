@@ -34,10 +34,10 @@ function detectUserTable(models, userTableOption) {
 /**
  * Extract RLS policies from PostgreSQL
  * @param {string} databaseUrl - PostgreSQL connection URL
- * @param {Array} modelNames - Array of model names
- * @returns {Object} - RLS policies for each table
+ * @param {Object} models - Models object with dbName mapping
+ * @returns {Object} - RLS policies for each model
  */
-async function extractPostgreSQLPolicies(databaseUrl, modelNames) {
+async function extractPostgreSQLPolicies(databaseUrl, models) {
   const client = new Client({ connectionString: databaseUrl });
 
   try {
@@ -45,8 +45,11 @@ async function extractPostgreSQLPolicies(databaseUrl, modelNames) {
 
     const policies = {};
 
-    // Initialize all models with empty policies
-    for (const modelName of modelNames) {
+    // Create mapping from database table name to model name
+    const tableToModelMap = {};
+    for (const [modelName, modelData] of Object.entries(models)) {
+      const dbName = modelData.dbName || modelName.toLowerCase();
+      tableToModelMap[dbName] = modelName;
       policies[modelName] = [];
     }
 
@@ -65,11 +68,13 @@ async function extractPostgreSQLPolicies(databaseUrl, modelNames) {
       ORDER BY tablename, policyname
     `);
 
-    // Group policies by table
+    // Group policies by model (using table to model mapping)
     for (const row of result.rows) {
       const tableName = row.tablename;
-      if (policies[tableName] !== undefined) {
-        policies[tableName].push({
+      const modelName = tableToModelMap[tableName];
+
+      if (modelName && policies[modelName] !== undefined) {
+        policies[modelName].push({
           name: row.policyname,
           permissive: row.permissive === 'PERMISSIVE',
           roles: row.roles,
@@ -290,7 +295,7 @@ async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTa
 
     console.log('Extracting RLS policies from database...');
     try {
-      policies = await extractPostgreSQLPolicies(databaseUrl, modelNames);
+      policies = await extractPostgreSQLPolicies(databaseUrl, models);
       const totalPolicies = Object.values(policies).reduce((sum, p) => sum + p.length, 0);
       console.log(`✓ Extracted ${totalPolicies} RLS policies from PostgreSQL`);
     } catch (error) {
