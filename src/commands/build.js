@@ -12,7 +12,7 @@ const { generateAllRoutes } = require('../generators/routeGenerator');
  */
 function generateBaseModelFile(modelJsPath) {
   const content = `const { QueryBuilder, prisma } = require("./QueryBuilder");
-const {rls} = require('../../rapidd/rapidd');
+const {rls} = require('../rapidd/rapidd');
 const {ErrorResponse} = require('./Api');
 
 class Model {
