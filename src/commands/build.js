@@ -33,11 +33,11 @@ class Model {
     _filter = (q) => this.queryBuilder.filter(q);
     _include = (include) => this.queryBuilder.include(include, this.user);
     // RLS METHODS
-    _canCreate = () => this.rls.canCreate?.(this.user) || false;
-    _hasAccess = (data) => this.rls.hasAccess?.(data, this.user) || false;
-    _getAccessFilter = () => this.rls.getAccessFilter?.(this.user);
-    _getUpdateFilter = () => this.rls.getUpdateFilter?.(this.user);
-    _getDeleteFilter = () => this.rls.getDeleteFilter?.(this.user);
+    _canCreate = () => this.rls?.canCreate?.(this.user);
+    _hasAccess = (data) => this.rls?.hasAccess?.(data, this.user) || false;
+    _getAccessFilter = () => this.rls?.getAccessFilter?.(this.user);
+    _getUpdateFilter = () => this.rls?.getUpdateFilter?.(this.user);
+    _getDeleteFilter = () => this.rls?.getDeleteFilter?.(this.user);
     _omit = () => this.queryBuilder.omit(this.user);
 
     /**
@@ -150,33 +150,21 @@ class Model {
             throw new ErrorResponse(403, "no_permission_to_update");
         }
 
-        // GET DATA FIRST (also checks read access)
-        const current_data = await this._get(id, "ALL");
-
-        // If updateFilter is not empty, verify the record matches the filter
-        if (Object.keys(updateFilter).length > 0) {
-            const canUpdate = await this.prisma.findUnique({
-                'where': {
-                    'id': id,
-                    ...updateFilter
-                },
-                'select': { 'id': true }
-            });
-            if (!canUpdate) {
-                throw new ErrorResponse(403, "no_permission_to_update");
-            }
-        }
-
         // VALIDATE PASSED FIELDS AND RELATIONSHIPS
         this.queryBuilder.update(id, data, this.user_id);
-        return await this.prisma.update({
+        const response = await this.prisma.update({
             'where': {
-                'id': id
+                'id': id,
+                ...updateFilter
             },
             'data': data,
             'include': this.include('ALL'),
             ...options
         });
+        if(response){
+            return response;
+        }
+        throw new ErrorResponse(403, "no_permission");
     }
 
     /**
@@ -203,30 +191,18 @@ class Model {
             throw new ErrorResponse(403, "no_permission_to_delete");
         }
 
-        // GET DATA FIRST (also checks read access)
-        const current_data = await this._get(id);
-
-        // If deleteFilter is not empty, verify the record matches the filter
-        if (Object.keys(deleteFilter).length > 0) {
-            const canDelete = await this.prisma.findUnique({
-                'where': {
-                    'id': id,
-                    ...deleteFilter
-                },
-                'select': { 'id': true }
-            });
-            if (!canDelete) {
-                throw new ErrorResponse(403, "no_permission_to_delete");
-            }
-        }
-
-        return await this.prisma.delete({
+        const response = await this.prisma.delete({
             'where': {
-                id: parseInt(id)
+                id: parseInt(id),
+                ...deleteFilter
             },
             'select': this.select(),
             ...options
         });
+        if(response){
+            return response;
+        }
+        throw new ErrorResponse(403, "no_permission");
     }
 
     /**
@@ -306,7 +282,7 @@ class Model {
      */
     getAccessFilter(){
         const filter = this._getAccessFilter()
-        if(this.user.role == "application" || filter == true){
+        if(this.user.role == "application" || filter === true){
             return {};
         }
         return this._getAccessFilter();
@@ -336,7 +312,7 @@ class Model {
      */
     getUpdateFilter(){
         const filter = this._getUpdateFilter();
-        if(this.user.role == "application" || filter == true){
+        if(this.user.role == "application" || filter === true){
             return {};
         }
         return filter;
@@ -348,7 +324,7 @@ class Model {
      */
     getDeleteFilter(){
         const filter = this._getDeleteFilter();
-        if(this.user.role == "application" || filter == true){
+        if(this.user.role == "application" || filter === true){
             return {};
         }
         return filter;
@@ -381,12 +357,96 @@ module.exports = {Model, QueryBuilder, prisma};
  * Generate rapidd/rapidd.js file
  */
 function generateRapiddFile(rapiddJsPath) {
-  const content = `const { PrismaClient, Prisma } = require('../prisma/client');
+  const content = `const { PrismaClient } = require('../prisma/client');
+const { AsyncLocalStorage } = require('async_hooks');
 const rls = require('./rls');
 
-const prisma = new PrismaClient();
+// Request Context Storage
+const requestContext = new AsyncLocalStorage();
 
-module.exports = {prisma, Prisma, rls};
+// RLS Configuration aus Environment Variables
+const RLS_CONFIG = {
+  namespace: process.env.RLS_NAMESPACE || 'app',
+  userId: process.env.RLS_USER_ID || 'current_user_id',
+  userRole: process.env.RLS_USER_ROLE || 'current_user_role',
+};
+
+// Basis Prisma Client
+const basePrisma = new PrismaClient({
+  log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+});
+
+/**
+ * Setze RLS Session Variables in PostgreSQL
+ */
+async function setRLSVariables(tx, userId, userRole) {
+    const namespace = RLS_CONFIG.namespace;
+    const userIdVar = RLS_CONFIG.userId;
+    const userRoleVar = RLS_CONFIG.userRole;
+
+    await tx.$executeRawUnsafe(\`SET LOCAL \${namespace}.\${userIdVar} = '\${userId}'\`);
+    await tx.$executeRawUnsafe(\`SET LOCAL \${namespace}.\${userRoleVar} = '\${userRole}'\`);
+}
+
+// Erweiterter Prisma mit automatischer RLS
+const prisma = basePrisma.$extends({
+  query: {
+    async $allOperations({ args, query }) {
+      const context = requestContext.getStore();
+
+      // Kein Context = keine RLS (z.B. System-Operationen)
+      if (!context?.userId || !context?.userRole) {
+        return query(args);
+      }
+
+      const { userId, userRole } = context;
+
+      // Query in Transaction mit RLS ausführen
+      return basePrisma.$transaction(async (tx) => {
+        // Session-Variablen setzen
+        await setRLSVariables(tx, userId, userRole);
+
+        // Original Query ausführen
+        return query(args);
+      });
+    },
+  },
+});
+
+/**
+ * Helper: System-Operationen ohne RLS (für Cron-Jobs, etc.)
+ */
+async function withSystemAccess(callback) {
+  return requestContext.run(
+    { userId: 'system', userRole: 'ADMIN' },
+    callback
+  );
+}
+
+/**
+ * Helper: Als bestimmter User ausführen (für Tests)
+ */
+async function withUser(userId, userRole, callback) {
+  return requestContext.run({ userId, userRole }, callback);
+}
+
+/**
+ * Helper: Hole RLS Config (für SQL Generation)
+ */
+function getRLSConfig() {
+  return RLS_CONFIG;
+}
+
+module.exports = {
+  prisma,
+  PrismaClient,
+  requestContext,
+  withSystemAccess,
+  withUser,
+  getRLSConfig,
+  setRLSVariables,
+  rls
+};
 `;
 
   // Ensure rapidd directory exists
@@ -725,7 +785,11 @@ async function buildModels(options) {
       // Parse datasource from Prisma schema to get database URL
       const datasource = parseDatasource(schemaPath);
 
-      if (options.model) {
+      // For non-PostgreSQL databases (MySQL, SQLite, etc.), generate permissive RLS
+      if (!datasource.isPostgreSQL) {
+        console.log(`${datasource.provider || 'Non-PostgreSQL'} database detected - generating permissive RLS...`);
+        await generateRLS(models, rlsPath, null, false, options.userTable, relationships, options.debug);
+      } else if (options.model) {
         // Update only specific model in rls.js
         await updateRLSForModel(filteredModels, models, rlsPath, datasource, options.userTable, relationships, options.debug);
       } else {
@@ -742,10 +806,9 @@ async function buildModels(options) {
       }
     } catch (error) {
       console.error('Failed to generate RLS:', error.message);
-      if (!options.model) {
-        console.log('Generating permissive RLS fallback...');
-        await generateRLS(models, rlsPath, null, false, options.userTable, relationships, options.debug);
-      }
+      console.log('Generating permissive RLS fallback...');
+      // Pass null for URL and false for isPostgreSQL to skip database connection
+      await generateRLS(models, rlsPath, null, false, options.userTable, relationships, options.debug);
     }
   }
 

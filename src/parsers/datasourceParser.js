@@ -61,10 +61,19 @@ function parseDatasource(schemaPath) {
     isPostgreSQL = url.startsWith('postgresql://') || url.startsWith('postgres://');
   }
 
+  // Explicitly detect MySQL to avoid false PostgreSQL detection
+  const isMySQL = provider === 'mysql' || (url && url.startsWith('mysql://'));
+
+  // If it's MySQL, ensure isPostgreSQL is false
+  if (isMySQL) {
+    isPostgreSQL = false;
+  }
+
   return {
     provider,
     url,
-    isPostgreSQL
+    isPostgreSQL,
+    isMySQL
   };
 }
 
