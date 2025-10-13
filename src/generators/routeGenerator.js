@@ -13,12 +13,12 @@ function generateRouteFile(modelName) {
 const {${className}, QueryBuilder, prisma} = require('../../../src/Model/${className}');
 
 router.all('*', async (req, res, next) => {
-    if(req.session && req.user){
+    if(req.user){
         req.${className} = new ${className}({'user': req.user});
         next();
     }
     else{
-        return res.sendError(401, req.getTranslation("no_valid_session"));
+        return res.sendError(401, "no_valid_session");
     }
 });
 
@@ -82,8 +82,7 @@ router.patch('/:id', async function(req, res) {
 router.delete('/:id', async (req, res)=>{
     try{
         await req.${className}.delete(req.params.id);
-        const message = req.getTranslation("object_deleted_successfully", {modelName: "${className}"});
-        return res.sendResponse(200, message);
+        return res.sendResponse(200, "object_deleted_successfully", {modelName: "${className}"});
     }
     catch(error){
         const response = QueryBuilder.errorHandler(error);
