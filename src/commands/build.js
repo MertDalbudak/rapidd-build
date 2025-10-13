@@ -33,11 +33,11 @@ class Model {
     _filter = (q) => this.queryBuilder.filter(q);
     _include = (include) => this.queryBuilder.include(include, this.user);
     // RLS METHODS
-    _canCreate = () => this.rls?.canCreate?.(this.user);
-    _hasAccess = (data) => this.rls?.hasAccess?.(data, this.user) || false;
-    _getAccessFilter = () => this.rls?.getAccessFilter?.(this.user);
-    _getUpdateFilter = () => this.rls?.getUpdateFilter?.(this.user);
-    _getDeleteFilter = () => this.rls?.getDeleteFilter?.(this.user);
+    _canCreate = () => this.rls.canCreate(this.user);
+    _hasAccess = (data) => this.rls.hasAccess?.(data, this.user) || false;
+    _getAccessFilter = () => this.rls.getAccessFilter?.(this.user);
+    _getUpdateFilter = () => this.rls.getUpdateFilter(this.user);
+    _getDeleteFilter = () => this.rls.getDeleteFilter(this.user);
     _omit = () => this.queryBuilder.omit(this.user);
 
     /**
@@ -366,86 +366,208 @@ const requestContext = new AsyncLocalStorage();
 
 // RLS Configuration aus Environment Variables
 const RLS_CONFIG = {
-  namespace: process.env.RLS_NAMESPACE || 'app',
-  userId: process.env.RLS_USER_ID || 'current_user_id',
-  userRole: process.env.RLS_USER_ROLE || 'current_user_role',
+    namespace: process.env.RLS_NAMESPACE || 'app',
+    userId: process.env.RLS_USER_ID || 'current_user_id',
+    userRole: process.env.RLS_USER_ROLE || 'current_user_role',
 };
 
 // Basis Prisma Client
 const basePrisma = new PrismaClient({
-  log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
 /**
- * Setze RLS Session Variables in PostgreSQL
+ * FIXED: Setze RLS Session Variables in PostgreSQL
+ * Execute each SET command separately to avoid prepared statement error
  */
 async function setRLSVariables(tx, userId, userRole) {
     const namespace = RLS_CONFIG.namespace;
     const userIdVar = RLS_CONFIG.userId;
     const userRoleVar = RLS_CONFIG.userRole;
 
-    await tx.$executeRawUnsafe(\`SET LOCAL \${namespace}.\${userIdVar} = '\${userId}'\`);
-    await tx.$executeRawUnsafe(\`SET LOCAL \${namespace}.\${userRoleVar} = '\${userRole}'\`);
+    // Execute SET commands separately (PostgreSQL doesn't allow multiple commands in prepared statements)
+    await tx.$executeRawUnsafe(\`SET LOCAL "\${namespace}"."\${userIdVar}" = '\${userId}'\`);
+    await tx.$executeRawUnsafe(\`SET LOCAL "\${namespace}"."\${userRoleVar}" = '\${userRole}'\`);
 }
 
-// Erweiterter Prisma mit automatischer RLS
+// FIXED: Erweiterter Prisma mit automatischer RLS
 const prisma = basePrisma.$extends({
-  query: {
-    async $allOperations({ args, query }) {
-      const context = requestContext.getStore();
+    query: {
+        async $allOperations({ operation, args, query, model }) {
+            const context = requestContext.getStore();
 
-      // Kein Context = keine RLS (z.B. System-Operationen)
-      if (!context?.userId || !context?.userRole) {
-        return query(args);
-      }
+            // Kein Context = keine RLS (z.B. System-Operationen)
+            if (!context?.userId || !context?.userRole) {
+                return query(args);
+            }
 
-      const { userId, userRole } = context;
+            const { userId, userRole } = context;
 
-      // Query in Transaction mit RLS ausführen
-      return basePrisma.$transaction(async (tx) => {
-        // Session-Variablen setzen
-        await setRLSVariables(tx, userId, userRole);
+            // IMPORTANT: The entire operation must happen in ONE transaction
+            // We need to wrap the ENTIRE query execution in a single transaction
 
-        // Original Query ausführen
-        return query(args);
-      });
+            // For operations that are already transactions, just set the variables
+            if (operation === '$transaction') {
+                return basePrisma.$transaction(async (tx) => {
+                    await setRLSVariables(tx, userId, userRole);
+                    return query(args);
+                });
+            }
+
+            // For regular operations, wrap in transaction with RLS
+            return basePrisma.$transaction(async (tx) => {
+                // Set session variables
+                await setRLSVariables(tx, userId, userRole);
+
+                // Execute the original query using the transaction client
+                // This is the key: we need to use the transaction client for the query
+                if (model) {
+                    // Model query (e.g., user.findMany())
+                    return tx[model][operation](args);
+                } else {
+                    // Raw query or special operation
+                    return tx[operation](args);
+                }
+            });
+        },
     },
-  },
 });
+
+// Alternative approach: Manual transaction wrapper
+class PrismaWithRLS {
+    constructor() {
+        this.client = basePrisma;
+    }
+
+    /**
+     * Execute any Prisma operation with RLS context
+     */
+    async withRLS(userId, userRole, callback) {
+        return this.client.$transaction(async (tx) => {
+            // Execute SET commands separately to avoid prepared statement error
+            await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_id = '\${userId}'\`);
+            await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_role = '\${userRole}'\`);
+
+            // Execute callback with transaction client
+            return callback(tx);
+        });
+    }
+
+    /**
+     * Get a proxy client for a specific user
+     * This wraps ALL operations in RLS context
+     */
+    forUser(userId, userRole) {
+        const withRLS = this.withRLS.bind(this);
+        const client = this.client;
+
+        return new Proxy({}, {
+            get(target, model) {
+                // Return a proxy for the model
+                return new Proxy({}, {
+                    get(modelTarget, operation) {
+                        // Return a function that wraps the operation
+                        return async (args) => {
+                            return withRLS(userId, userRole, async (tx) => {
+                                return tx[model][operation](args);
+                            });
+                        };
+                    }
+                });
+            }
+        });
+    }
+}
+
+const prismaWithRLS = new PrismaWithRLS();
+
+/**
+ * Express Middleware: Set RLS context from authenticated user
+ */
+function setRLSContext(req, res, next) {
+    if (req.user) {
+        // Set context for async operations
+        requestContext.run(
+            {
+                userId: req.user.id,
+                userRole: req.user.role
+            },
+            () => next()
+        );
+    } else {
+        next();
+    }
+}
 
 /**
  * Helper: System-Operationen ohne RLS (für Cron-Jobs, etc.)
  */
 async function withSystemAccess(callback) {
-  return requestContext.run(
-    { userId: 'system', userRole: 'ADMIN' },
-    callback
-  );
+    // For system access, we might not want RLS at all
+    // So we use the base client directly
+    return callback(basePrisma);
 }
 
 /**
  * Helper: Als bestimmter User ausführen (für Tests)
  */
 async function withUser(userId, userRole, callback) {
-  return requestContext.run({ userId, userRole }, callback);
+    return requestContext.run({ userId, userRole }, () => callback());
+}
+
+/**
+ * Helper: Direct transaction with RLS for complex operations
+ */
+async function transactionWithRLS(userId, userRole, callback) {
+    return basePrisma.$transaction(async (tx) => {
+        // Set RLS context for this transaction - execute separately
+        await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_id = '\${userId}'\`);
+        await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_role = '\${userRole}'\`);
+
+        // Execute callback with transaction client
+        return callback(tx);
+    });
 }
 
 /**
  * Helper: Hole RLS Config (für SQL Generation)
  */
 function getRLSConfig() {
-  return RLS_CONFIG;
+    return RLS_CONFIG;
 }
 
+// Example usage in route
+/*
+app.get('/api/users', authenticateUser, setRLSContext, async (req, res) => {
+    // Option 1: Using extended prisma (automatic RLS)
+    const users = await prisma.user.findMany();
+
+    // Option 2: Using manual transaction
+    const users = await transactionWithRLS(req.user.id, req.user.role, async (tx) => {
+        return tx.user.findMany();
+    });
+
+    // Option 3: Using forUser helper
+    const userPrisma = prismaWithRLS.forUser(req.user.id, req.user.role);
+    const users = await userPrisma.user.findMany();
+
+    res.json(users);
+});
+*/
+
 module.exports = {
-  prisma,
-  PrismaClient,
-  requestContext,
-  withSystemAccess,
-  withUser,
-  getRLSConfig,
-  setRLSVariables,
-  rls
+    prisma,
+    basePrisma, // Export base for auth operations that don't need RLS
+    PrismaClient,
+    requestContext,
+    setRLSContext,
+    withSystemAccess,
+    withUser,
+    transactionWithRLS,
+    prismaWithRLS,
+    getRLSConfig,
+    setRLSVariables,
+    rls
 };
 `;
 
