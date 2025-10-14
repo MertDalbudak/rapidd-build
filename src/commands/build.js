@@ -597,8 +597,13 @@ const prisma = new PrismaClient({
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
+const prismaTransaction = async (operations) => prisma.$transaction(async (tx) => {
+    return Promise.all(operations.map(op => op(tx)));
+});
+
 module.exports = {
     prisma,
+    prismaTransaction,
     PrismaClient,
     acl
 };
