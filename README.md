@@ -5,7 +5,7 @@ Dynamic code generator that transforms Prisma schemas into complete Express.js C
 ## Features
 
 - 🚀 **Automatic CRUD API Generation** - Creates Express.js routes from Prisma models
-- 🔒 **RLS Translation** - Converts PostgreSQL Row-Level Security policies to JavaScript/Prisma filters (ACL)
+- 🔒 **RLS Translation** - Converts PostgreSQL Row-Level Security policies to JavaScript/Prisma filters (ACL: Access Control Layer)
 - 🎯 **Dynamic & Schema-Aware** - Zero hardcoding, adapts to any database structure
 - 🔗 **Relationship Handling** - Supports 1:1, 1:n, n:m including junction tables
 - 👥 **Role-Based Access Control** - Properly handles role checks in filters
@@ -50,7 +50,7 @@ npx rapidd build --user-table accounts
 - `-s, --schema <path>` - Prisma schema file (default: `./prisma/schema.prisma`)
 - `-m, --model <name>` - Generate/update only specific model (e.g., "account", "user")
 - `--only <component>` - Generate only specific component: "model", "route", "acl", or "relationship"
-- `--user-table <name>` - User table name for RLS (default: auto-detected)
+- `--user-table <name>` - User table name for ACL (default: auto-detected)
 
 ## Selective Generation
 
@@ -122,9 +122,6 @@ CREATE POLICY user_policy ON posts
 
 **Generated JavaScript:**
 ```javascript
-hasAccess: (data, user) => {
-  return data?.author_id === user?.id || ['admin', 'moderator'].includes(user?.role);
-},
 getAccessFilter: (user) => {
   if (['admin', 'moderator'].includes(user?.role)) return {};
   return { author_id: user?.id };
