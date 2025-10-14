@@ -30,7 +30,7 @@ function detectUserTable(models, userTableOption) {
 }
 
 /**
- * Extract RLS policies from PostgreSQL
+ * Extract ACL policies from PostgreSQL RLS
  */
 async function extractPostgreSQLPolicies(databaseUrl, models) {
   const client = new Client({ connectionString: databaseUrl });
@@ -48,7 +48,7 @@ async function extractPostgreSQLPolicies(databaseUrl, models) {
       policies[modelName] = [];
     }
 
-    // Query all RLS policies from pg_policies
+    // Query all policies from PostgreSQL RLS (pg_policies)
     const result = await client.query(`
       SELECT
         tablename,
@@ -92,16 +92,15 @@ async function extractPostgreSQLPolicies(databaseUrl, models) {
 }
 
 /**
- * Generate RLS functions for a single model from PostgreSQL policies
+ * Generate ACL functions for a single model from PostgreSQL policies
  */
-function generateModelRLS(modelName, policies, converter) {
+function generateModelACL(modelName, policies, converter) {
   const hasPolicies = policies && policies.length > 0;
 
   if (!hasPolicies) {
-    // No RLS policies - generate permissive access
+    // No policies - generate permissive access
     return `    ${modelName}: {
         canCreate: (user) => true,
-        hasAccess: (data, user) => true,
         getAccessFilter: (user) => ({}),
         getUpdateFilter: (user) => ({}),
         getDeleteFilter: (user) => ({}),
@@ -117,7 +116,6 @@ function generateModelRLS(modelName, policies, converter) {
 
   // Generate each function
   const canCreateCode = generateFunction(insertPolicies, 'withCheck', converter, modelName);
-  const hasAccessCode = generateFunction(selectPolicies, 'using', converter, modelName);
   const accessFilterCode = generateFilter(selectPolicies, 'using', converter, modelName);
   let updateFilterCode = generateFilter(updatePolicies, 'using', converter, modelName);
   let deleteFilterCode = generateFilter(deletePolicies, 'using', converter, modelName);
@@ -135,9 +133,6 @@ function generateModelRLS(modelName, policies, converter) {
   return `    ${modelName}: {
         canCreate: (user) => {
             ${canCreateCode}
-        },
-        hasAccess: (data, user) => {
-            ${hasAccessCode}
         },
         getAccessFilter: (user) => {
             ${accessFilterCode}
@@ -173,7 +168,7 @@ function generateFunction(policies, expressionField, converter, modelName) {
         console.log(`✓ Policy '${policy.name}': ${expr.substring(0, 50)}... -> ${jsExpr.substring(0, 80)}`);
         conditions.push(jsExpr);
       } catch (e) {
-        console.warn(`⚠ Failed to convert RLS policy '${policy.name}' for ${modelName}: ${e.message}`);
+        console.warn(`⚠ Failed to convert policy '${policy.name}' for ${modelName}: ${e.message}`);
         console.warn(`  SQL: ${expr}`);
         conditions.push(`true /* TODO: Manual conversion needed for policy '${policy.name}' */`);
       }
@@ -221,7 +216,7 @@ function generateFilter(policies, expressionField, converter, modelName) {
           hasDataFilter: prismaFilter !== '{}'
         });
       } catch (e) {
-        console.warn(`⚠ Failed to convert RLS filter policy '${policy.name}' for ${modelName}: ${e.message}`);
+        console.warn(`⚠ Failed to convert filter policy '${policy.name}' for ${modelName}: ${e.message}`);
         console.warn(`  SQL: ${expr}`);
         // On error, skip filter (fail-safe - no access)
       }
@@ -298,9 +293,9 @@ function buildConditionalFilter(filtersWithRoles) {
 }
 
 /**
- * Generate complete rls.js file
+ * Generate complete acl.js file
  */
-async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTableOption, relationships = {}, debug = false, allModels = null) {
+async function generateACL(models, outputPath, databaseUrl, isPostgreSQL, userTableOption, relationships = {}, debug = false, allModels = null) {
   // Use allModels for user table detection if provided (when filtering by model)
   const modelsForUserDetection = allModels || models;
   const userTable = detectUserTable(modelsForUserDetection, userTableOption);
@@ -309,7 +304,7 @@ async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTa
   let policies = {};
   const timestamp = new Date().toISOString();
 
-  let rlsCode = `const rls = {\n    model: {},\n    lastUpdateDate: '${timestamp}'\n};\n\n`;
+  let aclCode = `const acl = {\n    model: {},\n    lastUpdateDate: '${timestamp}'\n};\n\n`;
 
   // Create enhanced converter with analyzed functions, models, and relationships
   let converter = createEnhancedConverter({}, {}, models, relationships);
@@ -332,15 +327,15 @@ async function generateRLS(models, outputPath, databaseUrl, isPostgreSQL, userTa
 
       // Save function analysis for debugging (only if --debug flag is set)
       if (debug) {
-        const configPath = path.join(path.dirname(outputPath), 'rls-mappings.json');
+        const configPath = path.join(path.dirname(outputPath), 'acl-mappings.json');
         const mappingConfig = generateMappingConfig(functionAnalysis);
         fs.writeFileSync(configPath, JSON.stringify(mappingConfig, null, 2));
         console.log(`✓ Function mappings saved to ${configPath}`);
       }
 
-      // Also add user context requirements as a comment in rls.js
+      // Also add user context requirements as a comment in acl.js
       if (Object.keys(functionAnalysis.userContextRequirements).length > 0) {
-        rlsCode = `/**
+        aclCode = `/**
  * User Context Requirements:
  * The user object should contain:
 ${Object.entries(functionAnalysis.userContextRequirements)
@@ -348,7 +343,7 @@ ${Object.entries(functionAnalysis.userContextRequirements)
   .join('\n')}
  */
 
-` + rlsCode;
+` + aclCode;
       }
     } catch (error) {
       console.warn(`⚠ Could not analyze functions: ${error.message}`);
@@ -358,32 +353,32 @@ ${Object.entries(functionAnalysis.userContextRequirements)
     try {
       policies = await extractPostgreSQLPolicies(databaseUrl, models);
       const totalPolicies = Object.values(policies).reduce((sum, p) => sum + p.length, 0);
-      console.log(`✓ Extracted ${totalPolicies} RLS policies from PostgreSQL`);
+      console.log(`✓ Extracted ${totalPolicies} policies from PostgreSQL RLS`);
     } catch (error) {
-      console.warn(`⚠ Failed to extract PostgreSQL RLS: ${error.message}`);
-      console.log('Generating permissive RLS for all models...');
+      console.warn(`⚠ Failed to extract PostgreSQL policies: ${error.message}`);
+      console.log('Generating permissive ACL for all models...');
       for (const modelName of modelNames) {
         policies[modelName] = [];
       }
     }
   } else {
     if (!isPostgreSQL) {
-      console.log('Non-PostgreSQL database detected - RLS not supported');
+      console.log('Non-PostgreSQL database detected - generating permissive ACL');
     }
-    console.log('Generating permissive RLS for all models...');
+    console.log('Generating permissive ACL for all models...');
     for (const modelName of modelNames) {
       policies[modelName] = [];
     }
   }
 
-  // Generate RLS for each model
-  rlsCode += 'rls.model = {\n';
-  const modelRLSCode = modelNames.map(modelName => {
-    return generateModelRLS(modelName, policies[modelName], converter);
+  // Generate ACL for each model
+  aclCode += 'acl.model = {\n';
+  const modelACLCode = modelNames.map(modelName => {
+    return generateModelACL(modelName, policies[modelName], converter);
   });
-  rlsCode += modelRLSCode.join(',\n');
-  rlsCode += '\n};\n\n';
-  rlsCode += 'module.exports = rls;\n';
+  aclCode += modelACLCode.join(',\n');
+  aclCode += '\n};\n\n';
+  aclCode += 'module.exports = acl;\n';
 
   // Ensure output directory exists
   const outputDir = path.dirname(outputPath);
@@ -391,10 +386,10 @@ ${Object.entries(functionAnalysis.userContextRequirements)
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  fs.writeFileSync(outputPath, rlsCode);
-  console.log('✓ Generated rls.js with dynamic function mappings');
+  fs.writeFileSync(outputPath, aclCode);
+  console.log('✓ Generated acl.js with dynamic function mappings');
 }
 
 module.exports = {
-  generateRLS
+  generateACL
 };

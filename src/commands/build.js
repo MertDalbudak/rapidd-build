@@ -3,7 +3,7 @@ const path = require('path');
 const { parsePrismaSchema, parsePrismaDMMF } = require('../parsers/prismaParser');
 const { generateAllModels } = require('../generators/modelGenerator');
 const { generateRelationshipsFromDMMF, generateRelationshipsFromSchema } = require('../generators/relationshipsGenerator');
-const { generateRLS } = require('../generators/rlsGeneratorV2');
+const { generateACL } = require('../generators/aclGenerator');
 const { parseDatasource } = require('../parsers/datasourceParser');
 const { generateAllRoutes } = require('../generators/routeGenerator');
 
@@ -11,8 +11,8 @@ const { generateAllRoutes } = require('../generators/routeGenerator');
  * Generate src/Model.js base class file
  */
 function generateBaseModelFile(modelJsPath) {
-  const content = `const { QueryBuilder, prisma } = require("./QueryBuilder");
-const {rls} = require('../rapidd/rapidd');
+  const content = `const { QueryBuilder, prisma, prismaTransaction } = require("./QueryBuilder");
+const {acl} = require('../rapidd/rapidd');
 const {ErrorResponse} = require('./Api');
 
 class Model {
@@ -23,7 +23,7 @@ class Model {
     constructor(name, options){
         this.modelName = name;
         this.queryBuilder = new QueryBuilder(name);
-        this.rls = rls.model[name] || {};
+        this.acl = acl.model[name] || {};
         this.options = options || {}
         this.user = this.options.user || {'id': 1, 'role': 'application'};
         this.user_id = this.user ? this.user.id : null;
@@ -32,12 +32,11 @@ class Model {
     _select = (fields) => this.queryBuilder.select(fields);
     _filter = (q) => this.queryBuilder.filter(q);
     _include = (include) => this.queryBuilder.include(include, this.user);
-    // RLS METHODS
-    _canCreate = () => this.rls.canCreate(this.user);
-    _hasAccess = (data) => this.rls.hasAccess?.(data, this.user) || false;
-    _getAccessFilter = () => this.rls.getAccessFilter?.(this.user);
-    _getUpdateFilter = () => this.rls.getUpdateFilter(this.user);
-    _getDeleteFilter = () => this.rls.getDeleteFilter(this.user);
+    // ACL METHODS
+    _canCreate = () => this.acl.canCreate(this.user);
+    _getAccessFilter = () => this.acl.getAccessFilter?.(this.user);
+    _getUpdateFilter = () => this.acl.getUpdateFilter(this.user);
+    _getDeleteFilter = () => this.acl.getDeleteFilter(this.user);
     _omit = () => this.queryBuilder.omit(this.user);
 
     /**
@@ -61,15 +60,21 @@ class Model {
         }
 
         // Query the database using Prisma with filters, pagination, and limits
-        return await this.prisma.findMany({
-            'where': this.filter(q),
-            'include': this.include(include),
-            'take': take,
-            'skip': skip,
-            'orderBy': this.sort(sortBy, sortOrder),
-            'omit': this._omit(),
-            ...options
-        });
+        const [data, total] = await prismaTransaction([
+            (tx) => tx[this.name].findMany({
+                'where': this.filter(q),
+                'include': this.include(include),
+                'take': take,
+                'skip': skip,
+                'orderBy': this.sort(sortBy, sortOrder),
+                'omit': this._omit(),
+                ...options
+            }),
+            (tx) => tx[this.name].count({
+                'where': this.filter(q)
+            })
+        ]);
+        return {data, total};
     }
     /**
      * @param {number} id
@@ -289,15 +294,6 @@ class Model {
     }
 
     /**
-     *
-     * @param {*} data
-     * @returns {boolean}
-     */
-    hasAccess(data) {
-        return this.user.role == "application" ? true : this._hasAccess(data, this.user);
-    }
-
-    /**
      * Check if user can create records
      * @returns {boolean}
      */
@@ -307,7 +303,7 @@ class Model {
     }
 
     /**
-     * Get update filter for RLS
+     * Get update filter for ACL
      * @returns {Object|false}
      */
     getUpdateFilter(){
@@ -319,7 +315,7 @@ class Model {
     }
 
     /**
-     * Get delete filter for RLS
+     * Get delete filter for ACL
      * @returns {Object|false}
      */
     getDeleteFilter(){
@@ -355,11 +351,17 @@ module.exports = {Model, QueryBuilder, prisma};
 
 /**
  * Generate rapidd/rapidd.js file
+ * @param {string} rapiddJsPath - Path to rapidd.js
+ * @param {boolean} isPostgreSQL - Whether the database is PostgreSQL
  */
-function generateRapiddFile(rapiddJsPath) {
-  const content = `const { PrismaClient } = require('../prisma/client');
+function generateRapiddFile(rapiddJsPath, isPostgreSQL = true) {
+  let content;
+
+  if (isPostgreSQL) {
+    // PostgreSQL version with RLS support
+    content = `const { PrismaClient } = require('../prisma/client');
 const { AsyncLocalStorage } = require('async_hooks');
-const rls = require('./rls');
+const acl = require('./acl');
 
 // Request Context Storage
 const requestContext = new AsyncLocalStorage();
@@ -432,6 +434,20 @@ const prisma = basePrisma.$extends({
         },
     },
 });
+
+// Helper for batch operations in single transaction
+async function prismaTransaction(operations) {
+    const context = requestContext.getStore();
+    
+    if (!context?.userId || !context?.userRole) {
+        return Promise.all(operations);
+    }
+    
+    return basePrisma.$transaction(async (tx) => {
+        await setRLSVariables(tx, context.userId, context.userRole);
+        return Promise.all(operations.map(op => op(tx)));
+    });
+}
 
 // Alternative approach: Manual transaction wrapper
 class PrismaWithRLS {
@@ -557,6 +573,7 @@ app.get('/api/users', authenticateUser, setRLSContext, async (req, res) => {
 
 module.exports = {
     prisma,
+    prismaTransaction,
     basePrisma, // Export base for auth operations that don't need RLS
     PrismaClient,
     requestContext,
@@ -567,9 +584,26 @@ module.exports = {
     prismaWithRLS,
     getRLSConfig,
     setRLSVariables,
-    rls
+    acl
 };
 `;
+  } else {
+    // Non-PostgreSQL version (MySQL, SQLite, etc.) - simplified without RLS
+    content = `const { PrismaClient } = require('../prisma/client');
+const acl = require('./acl');
+
+// Standard Prisma Client
+const prisma = new PrismaClient({
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+});
+
+module.exports = {
+    prisma,
+    PrismaClient,
+    acl
+};
+`;
+  }
 
   // Ensure rapidd directory exists
   const rapiddDir = path.dirname(rapiddJsPath);
@@ -636,14 +670,14 @@ async function updateRelationshipsForModel(filteredModels, relationshipsPath, pr
 }
 
 /**
- * Update rls.js for a specific model
+ * Update acl.js for a specific model
  */
-async function updateRLSForModel(filteredModels, allModels, rlsPath, datasource, userTable, relationships, debug = false) {
-  const { generateRLS } = require('../generators/rlsGeneratorV2');
+async function updateACLForModel(filteredModels, allModels, aclPath, datasource, userTable, relationships, debug = false) {
+  const { generateACL } = require('../generators/aclGenerator');
 
-  // Generate RLS for the filtered model (but pass all models for user table detection)
-  const tempPath = rlsPath + '.tmp';
-  await generateRLS(
+  // Generate ACL for the filtered model (but pass all models for user table detection)
+  const tempPath = aclPath + '.tmp';
+  await generateACL(
     filteredModels,
     tempPath,
     datasource.url,
@@ -654,11 +688,11 @@ async function updateRLSForModel(filteredModels, allModels, rlsPath, datasource,
     allModels
   );
 
-  // Read the generated RLS for the specific model
+  // Read the generated ACL for the specific model
   const tempContent = fs.readFileSync(tempPath, 'utf8');
   fs.unlinkSync(tempPath);
 
-  // Extract the model's RLS configuration
+  // Extract the model's ACL configuration
   const modelName = Object.keys(filteredModels)[0];
 
   // Find the start of the model definition
@@ -695,44 +729,43 @@ async function updateRLSForModel(filteredModels, allModels, rlsPath, datasource,
 
       if (braceCount === 0) {
         // Found the closing brace
-        const modelRls = tempContent.substring(modelStart, i + 1);
         break;
       }
     }
   }
 
   if (braceCount !== 0) {
-    throw new Error(`Could not extract RLS for model ${modelName} - unmatched braces`);
+    throw new Error(`Could not extract ACL for model ${modelName} - unmatched braces`);
   }
 
-  const modelRls = tempContent.substring(modelStart, i + 1);
+  const modelAcl = tempContent.substring(modelStart, i + 1);
 
-  // Read existing rls.js
-  if (fs.existsSync(rlsPath)) {
-    let existingContent = fs.readFileSync(rlsPath, 'utf8');
+  // Read existing acl.js
+  if (fs.existsSync(aclPath)) {
+    let existingContent = fs.readFileSync(aclPath, 'utf8');
 
-    // Check if model already exists in RLS
+    // Check if model already exists in ACL
     const existingModelPattern = new RegExp(`${modelName}:\\s*\\{[\\s\\S]*?\\n    \\}(?=,|\\n)`);
 
     if (existingModelPattern.test(existingContent)) {
-      // Replace existing model RLS
-      existingContent = existingContent.replace(existingModelPattern, modelRls);
+      // Replace existing model ACL
+      existingContent = existingContent.replace(existingModelPattern, modelAcl);
     } else {
-      // Add new model RLS before the closing of rls.model
+      // Add new model ACL before the closing of acl.model
       // Find the last closing brace of a model object and add comma after it
       existingContent = existingContent.replace(
         /(\n    \})\n(\};)/,
-        `$1,\n    ${modelRls}\n$2`
+        `$1,\n    ${modelAcl}\n$2`
       );
     }
 
-    fs.writeFileSync(rlsPath, existingContent);
+    fs.writeFileSync(aclPath, existingContent);
     console.log(`✓ Updated RLS for model: ${modelName}`);
   } else {
-    // If rls.js doesn't exist, create it with just this model
-    await generateRLS(
+    // If acl.js doesn't exist, create it with just this model
+    await generateACL(
       filteredModels,
-      rlsPath,
+      aclPath,
       datasource.url,
       datasource.isPostgreSQL,
       userTable,
@@ -764,7 +797,7 @@ async function buildModels(options) {
   const modelJsPath = path.join(srcDir, 'Model.js');
   const rapiddDir = path.join(baseDir, 'rapidd');
   const relationshipsPath = path.join(rapiddDir, 'relationships.json');
-  const rlsPath = path.join(rapiddDir, 'rls.js');
+  const aclPath = path.join(rapiddDir, 'acl.js');
   const rapiddJsPath = path.join(rapiddDir, 'rapidd.js');
   const routesDir = path.join(baseDir, 'routes', 'api', 'v1');
   const logsDir = path.join(baseDir, 'logs');
@@ -840,13 +873,13 @@ async function buildModels(options) {
   const shouldGenerate = {
     model: !options.only || options.only === 'model',
     route: !options.only || options.only === 'route',
-    rls: !options.only || options.only === 'rls',
+    acl: !options.only || options.only === 'acl',
     relationship: !options.only || options.only === 'relationship'
   };
 
   // Validate --only option
-  if (options.only && !['model', 'route', 'rls', 'relationship'].includes(options.only)) {
-    throw new Error(`Invalid --only value "${options.only}". Must be one of: model, route, rls, relationship`);
+  if (options.only && !['model', 'route', 'acl', 'relationship'].includes(options.only)) {
+    throw new Error(`Invalid --only value "${options.only}". Must be one of: model, route, acl, relationship`);
   }
 
   // Generate model files
@@ -860,10 +893,18 @@ async function buildModels(options) {
     generateBaseModelFile(modelJsPath);
   }
 
+  // Parse datasource to determine database type
+  let datasource = { isPostgreSQL: true };  // Default to PostgreSQL
+  try {
+    datasource = parseDatasource(schemaPath);
+  } catch (error) {
+    console.warn('Could not parse datasource, assuming PostgreSQL:', error.message);
+  }
+
   // Generate rapidd/rapidd.js if it doesn't exist
   if (!fs.existsSync(rapiddJsPath)) {
     console.log('Generating rapidd/rapidd.js...');
-    generateRapiddFile(rapiddJsPath);
+    generateRapiddFile(rapiddJsPath, datasource.isPostgreSQL);
   }
 
   // Generate relationships.json
@@ -889,9 +930,9 @@ async function buildModels(options) {
     }
   }
 
-  // Generate RLS configuration
-  if (shouldGenerate.rls) {
-    console.log(`\nGenerating RLS configuration...`);
+  // Generate ACL configuration
+  if (shouldGenerate.acl) {
+    console.log(`\nGenerating ACL configuration...`);
 
     // Load relationships for Prisma filter building
     let relationships = {};
@@ -904,21 +945,19 @@ async function buildModels(options) {
     }
 
     try {
-      // Parse datasource from Prisma schema to get database URL
-      const datasource = parseDatasource(schemaPath);
 
-      // For non-PostgreSQL databases (MySQL, SQLite, etc.), generate permissive RLS
+      // For non-PostgreSQL databases (MySQL, SQLite, etc.), generate permissive ACL
       if (!datasource.isPostgreSQL) {
-        console.log(`${datasource.provider || 'Non-PostgreSQL'} database detected - generating permissive RLS...`);
-        await generateRLS(models, rlsPath, null, false, options.userTable, relationships, options.debug);
+        console.log(`${datasource.provider || 'Non-PostgreSQL'} database detected - generating permissive ACL...`);
+        await generateACL(models, aclPath, null, false, options.userTable, relationships, options.debug);
       } else if (options.model) {
-        // Update only specific model in rls.js
-        await updateRLSForModel(filteredModels, models, rlsPath, datasource, options.userTable, relationships, options.debug);
+        // Update only specific model in acl.js
+        await updateACLForModel(filteredModels, models, aclPath, datasource, options.userTable, relationships, options.debug);
       } else {
-        // Generate RLS for all models
-        await generateRLS(
+        // Generate ACL for all models
+        await generateACL(
           models,
-          rlsPath,
+          aclPath,
           datasource.url,
           datasource.isPostgreSQL,
           options.userTable,
@@ -927,10 +966,10 @@ async function buildModels(options) {
         );
       }
     } catch (error) {
-      console.error('Failed to generate RLS:', error.message);
-      console.log('Generating permissive RLS fallback...');
+      console.error('Failed to generate ACL:', error.message);
+      console.log('Generating permissive ACL fallback...');
       // Pass null for URL and false for isPostgreSQL to skip database connection
-      await generateRLS(models, rlsPath, null, false, options.userTable, relationships, options.debug);
+      await generateACL(models, aclPath, null, false, options.userTable, relationships, options.debug);
     }
   }
 

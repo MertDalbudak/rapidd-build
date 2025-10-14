@@ -26,12 +26,8 @@ router.all('*', async (req, res, next) => {
 router.get('/', async function(req, res) {
     try {
         const { q = {}, include = "", limit = 25, offset = 0, sortBy = "id", sortOrder = "asc" } = req.query;
-
-        const _data = req.${className}.getMany(q, include, limit, offset, sortBy, sortOrder);
-        const _count = req.${className}.count(q);
-        const [data, count] = await Promise.all([_data, _count]);
-
-        return res.sendList(data, {'take': req.${className}.take(Number(limit)), 'skip': req.${className}.skip(Number(offset)), 'total': count});
+        const results = await req.${className}.getMany(q, include, limit, offset, sortBy, sortOrder);
+        return res.sendList(results.data, {'take': req.${className}.take(Number(limit)), 'skip': req.${className}.skip(Number(offset)), 'total': results.total});
     }
     catch(error){
         const response = QueryBuilder.errorHandler(error);
