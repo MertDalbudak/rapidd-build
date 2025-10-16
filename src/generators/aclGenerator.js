@@ -1,7 +1,6 @@
 const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
-const { createConverter } = require('../parsers/autoRLSConverter');
 const { createEnhancedConverter } = require('../parsers/enhancedRLSConverter');
 const { analyzeFunctions, generateMappingConfig } = require('../parsers/functionAnalyzer');
 
