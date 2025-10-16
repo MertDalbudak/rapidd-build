@@ -48,9 +48,15 @@ function generateRelationships(models, outputPath) {
         // Find the foreign key field name
         const foreignKeyField = findForeignKeyField(relation, modelInfo, relatedModel);
 
+        if (!foreignKeyField) {
+          // Skip this relationship if we can't find the FK field
+          // This usually means the FK is on the other side of the relation
+          continue;
+        }
+
         relationships[modelName][relation.name] = {
           'object': relation.type,
-          'field': foreignKeyField || `${relation.type}_id` // Use actual FK or fallback to convention
+          'field': foreignKeyField
         };
       }
     }
@@ -74,39 +80,32 @@ function generateRelationships(models, outputPath) {
  * @returns {string|null} - Foreign key field name
  */
 function findForeignKeyField(relation, currentModel, relatedModel) {
-  // If relation has relationFromFields, use it
+  // IMPORTANT: The foreign key field is where the @relation(fields: [...]) is defined
+
+  // For array relations (one-to-many), the FK is in the related model (child)
+  if (relation.isArray) {
+    // Find the corresponding relation in the related model that points back
+    for (const relField of Object.values(relatedModel.fields)) {
+      if (relField.kind === 'object' &&
+          relField.relationName === relation.relationName &&
+          relField.relationFromFields &&
+          relField.relationFromFields.length > 0) {
+        // This is the FK field in the child (related) model
+        return relField.relationFromFields[0];
+      }
+    }
+    // Fallback
+    return null;
+  }
+
+  // For singular relations (many-to-one or one-to-one), check if THIS relation has fields defined
   if (relation.relationFromFields && relation.relationFromFields.length > 0) {
+    // The FK is in the current model
     return relation.relationFromFields[0];
   }
 
-  // For array relations (one-to-many from parent), look for the FK in the related model
-  if (relation.isArray) {
-    // Find which field in the related model points back to current model
-    for (const [fieldName, fieldInfo] of Object.entries(relatedModel.fields)) {
-      if (fieldInfo.relationName === relation.relationName &&
-          fieldInfo.relationFromFields &&
-          fieldInfo.relationFromFields.length > 0) {
-        // This is the FK field in the related model
-        return fieldInfo.relationFromFields[0];
-      }
-    }
-
-    // Fallback: convention-based
-    return `${relation.type}_id`;
-  }
-
-  // For singular relations (many-to-one), find the FK in current model
-  for (const [fieldName, fieldInfo] of Object.entries(currentModel.fields)) {
-    if (fieldInfo.relationName === relation.relationName &&
-        fieldInfo.relationToFields &&
-        fieldInfo.relationToFields.length > 0) {
-      // Found the matching relation field, return its FK
-      return fieldName;
-    }
-  }
-
-  // Final fallback
-  return `${relation.type}_id`;
+  // If no fields on this side, the FK must be on the other side (shouldn't use this relation for filtering)
+  return null;
 }
 
 /**

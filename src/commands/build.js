@@ -74,7 +74,7 @@ class Model {
                 'where': this.filter(q)
             })
         ]);
-        return {data, total};
+        return {data, meta: {take, skip, total}};
     }
     /**
      * @param {number} id

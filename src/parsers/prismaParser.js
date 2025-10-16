@@ -248,8 +248,18 @@ async function parsePrismaDMMF(prismaClientPath) {
             name: field.name,
             type: field.type,
             isArray: field.isList,
-            optional: !field.isRequired
+            optional: !field.isRequired,
+            relationName: field.relationName,
+            relationFromFields: field.relationFromFields || [],
+            relationToFields: field.relationToFields || [],
+            kind: field.kind
           });
+
+          // Also add these to the field object for consistency
+          models[model.name].fields[field.name].relationName = field.relationName;
+          models[model.name].fields[field.name].relationFromFields = field.relationFromFields || [];
+          models[model.name].fields[field.name].relationToFields = field.relationToFields || [];
+          models[model.name].fields[field.name].kind = field.kind;
         }
       }
     }

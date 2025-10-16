@@ -27,7 +27,7 @@ router.get('/', async function(req, res) {
     try {
         const { q = {}, include = "", limit = 25, offset = 0, sortBy = "id", sortOrder = "asc" } = req.query;
         const results = await req.${className}.getMany(q, include, limit, offset, sortBy, sortOrder);
-        return res.sendList(results.data, {'take': req.${className}.take(Number(limit)), 'skip': req.${className}.skip(Number(offset)), 'total': results.total});
+        return res.sendList(results.data, results.meta);
     }
     catch(error){
         const response = QueryBuilder.errorHandler(error);
