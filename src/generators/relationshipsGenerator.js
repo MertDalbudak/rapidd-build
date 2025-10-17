@@ -104,6 +104,21 @@ function findForeignKeyField(relation, currentModel, relatedModel) {
     return relation.relationFromFields[0];
   }
 
+  // For optional one-to-one relations where FK is on the other side
+  // (e.g., users -> student_profiles? where userId is in student_profiles)
+  if (!relation.isArray) {
+    // Find the corresponding relation in the related model that points back
+    for (const relField of Object.values(relatedModel.fields)) {
+      if (relField.kind === 'object' &&
+          relField.relationName === relation.relationName &&
+          relField.relationFromFields &&
+          relField.relationFromFields.length > 0) {
+        // This is the FK field in the related model (pointing back to us)
+        return relField.relationFromFields[0];
+      }
+    }
+  }
+
   // If no fields on this side, the FK must be on the other side (shouldn't use this relation for filtering)
   return null;
 }
