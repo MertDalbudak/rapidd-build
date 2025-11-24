@@ -37,7 +37,7 @@ class ${className} extends Model {
      * @returns {{} | null}
      */
     async get(id, include){
-        return await this._get(Number(id), include);
+        return await this._get(id, include);
     }
 
     /**
@@ -54,7 +54,7 @@ class ${className} extends Model {
      * @returns {Object}
      */
     async update(id, data){
-        return await this._update(Number(id), data);
+        return await this._update(id, data);
     }
 
     /**
@@ -62,7 +62,7 @@ class ${className} extends Model {
      * @returns {Object}
      */
     async delete(id){
-        return await this._delete(Number(id));
+        return await this._delete(id);
     }
 
     /**

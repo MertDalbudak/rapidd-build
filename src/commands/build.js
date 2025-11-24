@@ -29,9 +29,16 @@ class Model {
         this.user_id = this.user ? this.user.id : null;
     }
 
+    get primaryKey(){
+        const pkey = this.queryBuilder.getPrimaryKey();
+        return Array.isArray(pkey) ? pkey.join('_') : pkey;
+    }
+
     _select = (fields) => this.queryBuilder.select(fields);
     _filter = (q) => this.queryBuilder.filter(q);
     _include = (include) => this.queryBuilder.include(include, this.user);
+    _queryCreate = (data) => this.queryBuilder.create(data, this.user);
+    _queryUpdate = (id, data) => this.queryBuilder.update(id, data, this.user);
     // ACL METHODS
     _canCreate = () => this.acl.canCreate(this.user);
     _getAccessFilter = () => this.acl.getAccessFilter?.(this.user);
@@ -49,16 +56,16 @@ class Model {
      * @param {'asc'|'desc'} sortOrder
      * @returns {Promise<Object[]>}
      */
-    _getMany = async (q = {}, include = "", limit = 25, offset = 0, sortBy = "id", sortOrder = "asc", options = {})=>{
+    _getMany = async (q = {}, include = "", limit = 25, offset = 0, sortBy = this.primaryKey, sortOrder = "asc", options = {})=>{
         const take = this.take(Number(limit));
         const skip = this.skip(Number(offset));
 
-        sortBy = sortBy.trim();
-        sortOrder = sortOrder.trim();
+        sortBy = sortBy?.trim();
+        sortOrder = sortOrder?.trim();
         if (!sortBy.includes('.') && this.fields[sortBy] == undefined) {
             throw new ErrorResponse(400, "invalid_sort_field", {sortBy, modelName: this.constructor.name});
         }
-
+        
         // Query the database using Prisma with filters, pagination, and limits
         const [data, total] = await prismaTransaction([
             (tx) => tx[this.name].findMany({
@@ -83,11 +90,11 @@ class Model {
      */
     _get = async (id, include, options = {}) =>{
         const {omit, ..._options} = options;
-        id = Number(id);
+        console.log(JSON.stringify(this.include(include)));
         // To determine if the record is inaccessible, either due to non-existence or insufficient permissions, two simultaneous queries are performed.
         const _response = this.prisma.findUnique({
             'where': {
-                'id': id
+                [this.primaryKey]: id,
             },
             'include': this.include(include),
             'omit': {...this._omit(), ...omit},
@@ -96,7 +103,7 @@ class Model {
 
         const _checkPermission = this.prisma.findUnique({
             'where': {
-                'id': id,
+                [this.primaryKey]: id,
                 ...this.getAccessFilter()
             },
             'select': {
@@ -107,16 +114,16 @@ class Model {
         const [response, checkPermission] = await Promise.all([_response, _checkPermission]);
         if(response){
             if(checkPermission){
-                if(response.id != checkExistence?.id){   // IN CASE access_filter CONTAINS id FIELD
-                    throw new ErrorResponse(getTranslation("no_permission"), 403);
+                if(response.id != checkPermission?.id){   // IN CASE access_filter CONTAINS id FIELD
+                    throw new ErrorResponse(403, "no_permission");
                 }
             }
             else{
-                throw new ErrorResponse(getTranslation("no_permission"), 403);
+                throw new ErrorResponse(403, "no_permission");
             }
         }
         else{
-            throw new ErrorResponse(getTranslation("record_not_found"), 404);
+            throw new ErrorResponse(404, "record_not_found");
         }
         return response;
     }
@@ -131,7 +138,7 @@ class Model {
         }
 
         // VALIDATE PASSED FIELDS AND RELATIONSHIPS
-        this.queryBuilder.create(data, this.user_id);
+        this._queryCreate(data);
 
         // CREATE
         return await this.prisma.create({
@@ -147,8 +154,8 @@ class Model {
      * @returns {Promise<Object>}
      */
     _update = async (id, data, options = {}) => {
-        id = Number(id);
-
+        delete data.createdAt;
+        delete data.createdBy;
         // CHECK UPDATE PERMISSION
         const updateFilter = this.getUpdateFilter();
         if (updateFilter === false) {
@@ -156,10 +163,10 @@ class Model {
         }
 
         // VALIDATE PASSED FIELDS AND RELATIONSHIPS
-        this.queryBuilder.update(id, data, this.user_id);
+        this._queryUpdate(id, data);
         const response = await this.prisma.update({
             'where': {
-                'id': id,
+                [this.primaryKey]: id,
                 ...updateFilter
             },
             'data': data,
@@ -188,8 +195,6 @@ class Model {
      * @returns {Promise<Object>}
      */
     _delete = async (id, options = {}) => {
-        id = Number(id);
-
         // CHECK DELETE PERMISSION
         const deleteFilter = this.getDeleteFilter();
         if (deleteFilter === false) {
@@ -198,7 +203,7 @@ class Model {
 
         const response = await this.prisma.delete({
             'where': {
-                id: parseInt(id),
+                [this.primaryKey]: id,
                 ...deleteFilter
             },
             'select': this.select(),
@@ -229,7 +234,7 @@ class Model {
      * @returns {Promise<{} | null>}
      */
     async get(id, include, options = {}){
-        return await this._get(Number(id), include, options);
+        return await this._get(id, include, options);
     }
 
     /**
@@ -238,7 +243,7 @@ class Model {
      * @returns {Promise<Object>}
      */
     async update(id, data, options = {}){
-        return await this._update(Number(id), data, options);
+        return await this._update(id, data, options);
     }
 
     /**
@@ -255,7 +260,7 @@ class Model {
      * @returns {Promise<Object>}
      */
     async delete(id, data, options = {}){
-        return await this._delete(Number(id), data, options);
+        return await this._delete(id, data, options);
     }
 
     select(fields){
@@ -359,7 +364,7 @@ function generateRapiddFile(rapiddJsPath, isPostgreSQL = true) {
 
   if (isPostgreSQL) {
     // PostgreSQL version with RLS support
-    content = `const { PrismaClient } = require('../prisma/client');
+    content = `const { PrismaClient, Prisma } = require('../prisma/client');
 const { AsyncLocalStorage } = require('async_hooks');
 const acl = require('./acl');
 
@@ -373,13 +378,49 @@ const RLS_CONFIG = {
     userRole: process.env.RLS_USER_ROLE || 'current_user_role',
 };
 
-// Basis Prisma Client
-const basePrisma = new PrismaClient({
+// =====================================================
+// BASE PRISMA CLIENTS
+// =====================================================
+
+/**
+ * ADMIN CLIENT - Bypasses ALL RLS
+ * Uses DATABASE_URL_ADMIN connection (e.g., app_auth_proxy user)
+ * Use ONLY for authentication operations:
+ * - Login
+ * - Register
+ * - Email Verification
+ * - Password Reset
+ * - OAuth operations
+ */
+const authPrisma = new PrismaClient({
+    datasources: {
+        db: {
+            url: process.env.DATABASE_URL_ADMIN
+        }
+    },
     log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
 });
 
 /**
- * FIXED: Setze RLS Session Variables in PostgreSQL
+ * BASE CLIENT - Regular user with RLS
+ * Uses DATABASE_URL connection
+ * Use for all business operations
+ */
+const basePrisma = new PrismaClient({
+    datasources: {
+        db: {
+            url: process.env.DATABASE_URL
+        }
+    },
+    log: process.env.NODE_ENV === 'development' ? ['query', 'error', 'warn'] : ['error'],
+});
+
+// =====================================================
+// RLS HELPER FUNCTIONS
+// =====================================================
+
+/**
+ * Set RLS Session Variables in PostgreSQL
  * Execute each SET command separately to avoid prepared statement error
  */
 async function setRLSVariables(tx, userId, userRole) {
@@ -387,26 +428,47 @@ async function setRLSVariables(tx, userId, userRole) {
     const userIdVar = RLS_CONFIG.userId;
     const userRoleVar = RLS_CONFIG.userRole;
 
-    // Execute SET commands separately (PostgreSQL doesn't allow multiple commands in prepared statements)
-    await tx.$executeRawUnsafe(\`SET LOCAL "\${namespace}"."\${userIdVar}" = '\${userId}'\`);
-    await tx.$executeRawUnsafe(\`SET LOCAL "\${namespace}"."\${userRoleVar}" = '\${userRole}'\`);
+    // Execute SET commands separately
+    await tx.$executeRawUnsafe(\`SET LOCAL \${namespace}.\${userIdVar} = '\${userId}'\`);
+    await tx.$executeRawUnsafe(\`SET LOCAL \${namespace}.\${userRoleVar} = '\${userRole}'\`);
 }
 
-// FIXED: Erweiterter Prisma mit automatischer RLS
+/**
+ * Reset RLS Session Variables
+ */
+async function resetRLSVariables(tx) {
+    const namespace = RLS_CONFIG.namespace;
+    const userIdVar = RLS_CONFIG.userId;
+    const userRoleVar = RLS_CONFIG.userRole;
+
+    try {
+        await tx.$executeRawUnsafe(\`RESET \${namespace}.\${userIdVar}\`);
+        await tx.$executeRawUnsafe(\`RESET \${namespace}.\${userRoleVar}\`);
+    } catch (e) {
+        // Ignore errors on reset
+        console.error('Failed to reset RLS variables:', e);
+    }
+}
+
+// =====================================================
+// EXTENDED PRISMA WITH AUTOMATIC RLS
+// =====================================================
+
+/**
+ * Extended Prisma Client with automatic RLS context
+ * Automatically wraps all operations in RLS context from AsyncLocalStorage
+ */
 const prisma = basePrisma.$extends({
     query: {
         async $allOperations({ operation, args, query, model }) {
             const context = requestContext.getStore();
 
-            // Kein Context = keine RLS (z.B. System-Operationen)
+            // No context = no RLS (e.g., system operations)
             if (!context?.userId || !context?.userRole) {
                 return query(args);
             }
 
             const { userId, userRole } = context;
-
-            // IMPORTANT: The entire operation must happen in ONE transaction
-            // We need to wrap the ENTIRE query execution in a single transaction
 
             // For operations that are already transactions, just set the variables
             if (operation === '$transaction') {
@@ -422,7 +484,6 @@ const prisma = basePrisma.$extends({
                 await setRLSVariables(tx, userId, userRole);
 
                 // Execute the original query using the transaction client
-                // This is the key: we need to use the transaction client for the query
                 if (model) {
                     // Model query (e.g., user.findMany())
                     return tx[model][operation](args);
@@ -435,70 +496,33 @@ const prisma = basePrisma.$extends({
     },
 });
 
-// Helper for batch operations in single transaction
+// =====================================================
+// TRANSACTION HELPERS
+// =====================================================
+
+/**
+ * Helper for batch operations in single transaction
+ */
 async function prismaTransaction(operations) {
     const context = requestContext.getStore();
-    
+
     if (!context?.userId || !context?.userRole) {
         return Promise.all(operations);
     }
-    
+
     return basePrisma.$transaction(async (tx) => {
         await setRLSVariables(tx, context.userId, context.userRole);
         return Promise.all(operations.map(op => op(tx)));
     });
 }
 
-// Alternative approach: Manual transaction wrapper
-class PrismaWithRLS {
-    constructor() {
-        this.client = basePrisma;
-    }
-
-    /**
-     * Execute any Prisma operation with RLS context
-     */
-    async withRLS(userId, userRole, callback) {
-        return this.client.$transaction(async (tx) => {
-            // Execute SET commands separately to avoid prepared statement error
-            await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_id = '\${userId}'\`);
-            await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_role = '\${userRole}'\`);
-
-            // Execute callback with transaction client
-            return callback(tx);
-        });
-    }
-
-    /**
-     * Get a proxy client for a specific user
-     * This wraps ALL operations in RLS context
-     */
-    forUser(userId, userRole) {
-        const withRLS = this.withRLS.bind(this);
-        const client = this.client;
-
-        return new Proxy({}, {
-            get(target, model) {
-                // Return a proxy for the model
-                return new Proxy({}, {
-                    get(modelTarget, operation) {
-                        // Return a function that wraps the operation
-                        return async (args) => {
-                            return withRLS(userId, userRole, async (tx) => {
-                                return tx[model][operation](args);
-                            });
-                        };
-                    }
-                });
-            }
-        });
-    }
-}
-
-const prismaWithRLS = new PrismaWithRLS();
+// =====================================================
+// CONTEXT HELPERS
+// =====================================================
 
 /**
  * Express Middleware: Set RLS context from authenticated user
+ * Use this AFTER your authentication middleware
  */
 function setRLSContext(req, res, next) {
     if (req.user) {
@@ -516,74 +540,50 @@ function setRLSContext(req, res, next) {
 }
 
 /**
- * Helper: System-Operationen ohne RLS (für Cron-Jobs, etc.)
- */
-async function withSystemAccess(callback) {
-    // For system access, we might not want RLS at all
-    // So we use the base client directly
-    return callback(basePrisma);
-}
-
-/**
- * Helper: Als bestimmter User ausführen (für Tests)
- */
-async function withUser(userId, userRole, callback) {
-    return requestContext.run({ userId, userRole }, () => callback());
-}
-
-/**
- * Helper: Direct transaction with RLS for complex operations
- */
-async function transactionWithRLS(userId, userRole, callback) {
-    return basePrisma.$transaction(async (tx) => {
-        // Set RLS context for this transaction - execute separately
-        await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_id = '\${userId}'\`);
-        await tx.$executeRawUnsafe(\`SET LOCAL app.current_user_role = '\${userRole}'\`);
-
-        // Execute callback with transaction client
-        return callback(tx);
-    });
-}
-
-/**
- * Helper: Hole RLS Config (für SQL Generation)
+ * Get RLS Config (for SQL generation)
  */
 function getRLSConfig() {
     return RLS_CONFIG;
 }
 
-// Example usage in route
-/*
-app.get('/api/users', authenticateUser, setRLSContext, async (req, res) => {
-    // Option 1: Using extended prisma (automatic RLS)
-    const users = await prisma.user.findMany();
+// =====================================================
+// GRACEFUL SHUTDOWN
+// =====================================================
 
-    // Option 2: Using manual transaction
-    const users = await transactionWithRLS(req.user.id, req.user.role, async (tx) => {
-        return tx.user.findMany();
-    });
+async function disconnectAll() {
+    await authPrisma.$disconnect();
+    await basePrisma.$disconnect();
+}
 
-    // Option 3: Using forUser helper
-    const userPrisma = prismaWithRLS.forUser(req.user.id, req.user.role);
-    const users = await userPrisma.user.findMany();
-
-    res.json(users);
+process.on('beforeExit', async () => {
+    await disconnectAll();
 });
-*/
+
+// =====================================================
+// EXPORTS
+// =====================================================
 
 module.exports = {
-    prisma,
+    // Main clients
+    prisma,              // Use for regular operations with automatic RLS from context
+    authPrisma,          // Use ONLY for auth operations (login, register, etc.)
+
+    // Transaction helpers
     prismaTransaction,
-    basePrisma, // Export base for auth operations that don't need RLS
-    PrismaClient,
+
+    // Context helpers
     requestContext,
     setRLSContext,
-    withSystemAccess,
-    withUser,
-    transactionWithRLS,
-    prismaWithRLS,
-    getRLSConfig,
+
+    // RLS utilities
     setRLSVariables,
+    resetRLSVariables,
+    getRLSConfig,
+
+    // Utilities
+    disconnectAll,
+    PrismaClient,
+    Prisma,
     acl
 };
 `;
