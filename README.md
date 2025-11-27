@@ -13,6 +13,11 @@ Dynamic code generator that transforms Prisma schemas into complete Express.js C
 - 🗺️ **Relationships JSON** - Generates complete relationship mappings with foreign keys
 - ⚡ **Selective Generation** - Update only specific models or components
 
+## Requirements
+
+- **Prisma 7+** (recommended) - Full support for Prisma 7's new architecture
+- Node.js 14.0.0 or higher
+
 ## Installation
 
 ```bash
@@ -154,6 +159,27 @@ npx rapidd build --output ./generated
 npx rapidd build --model user --only model
 npx rapidd build --model user --only acl
 ```
+
+## Migration from Prisma 6 to 7
+
+If you're upgrading from Prisma 6, this package now automatically:
+
+1. **Uses `@prisma/internals`** for DMMF access (no longer relies on generated client)
+2. **Reads database URL** from multiple sources in order:
+   - `prisma.config.ts` (Prisma 7 default)
+   - Schema file `datasource.url` (Prisma 5/6 style)
+   - `DATABASE_URL` environment variable
+3. **Maintains full compatibility** - no changes needed to your workflow
+
+Simply update your dependencies and rebuild:
+
+```bash
+npm install @rapidd/build@latest
+npm install prisma@^7.0.0 @prisma/client@^7.0.0
+npx rapidd build
+```
+
+For more details on Prisma 7 migration, see the [official Prisma upgrade guide](https://www.prisma.io/docs/orm/more/upgrade-guides/upgrading-versions/upgrading-to-prisma-7).
 
 ## License
 

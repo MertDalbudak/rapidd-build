@@ -184,12 +184,12 @@ function generateRelationshipsFromSchema(schemaPath, outputPath) {
 
 /**
  * Generate relationships.json from DMMF
- * @param {string} prismaClientPath - Path to Prisma client
+ * @param {string} schemaPath - Path to Prisma schema file
  * @param {string} outputPath - Path to output relationships.json
  */
-async function generateRelationshipsFromDMMF(prismaClientPath, outputPath) {
+async function generateRelationshipsFromDMMF(schemaPath, outputPath) {
   const { parsePrismaDMMF } = require('../parsers/prismaParser');
-  const parsedData = await parsePrismaDMMF(prismaClientPath);
+  const parsedData = await parsePrismaDMMF(schemaPath);
   generateRelationships(parsedData.models, outputPath);
 }
 

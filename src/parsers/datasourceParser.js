@@ -9,6 +9,39 @@ try {
 }
 
 /**
+ * Try to load DATABASE_URL from prisma.config.ts (Prisma 7)
+ * @returns {string|null} - Database URL or null if not found
+ */
+function loadUrlFromPrismaConfig() {
+  const configPath = path.join(process.cwd(), 'prisma.config.ts');
+
+  if (!fs.existsSync(configPath)) {
+    return null;
+  }
+
+  try {
+    const configContent = fs.readFileSync(configPath, 'utf-8');
+
+    // Look for env('DATABASE_URL') or similar patterns
+    const envMatch = configContent.match(/env\(['"]([^'"]+)['"]\)/);
+    if (envMatch) {
+      const envVar = envMatch[1];
+      return process.env[envVar] || null;
+    }
+
+    // Look for direct URL assignment
+    const urlMatch = configContent.match(/url:\s*['"]([^'"]+)['"]/);
+    if (urlMatch) {
+      return urlMatch[1];
+    }
+  } catch (e) {
+    // Failed to read config, return null
+  }
+
+  return null;
+}
+
+/**
  * Parse datasource configuration from Prisma schema
  * @param {string} schemaPath - Path to Prisma schema file
  * @returns {Object} - Datasource configuration with resolved URL
@@ -30,26 +63,32 @@ function parseDatasource(schemaPath) {
   const providerMatch = datasourceBlock.match(/provider\s*=\s*"([^"]+)"/);
   const provider = providerMatch ? providerMatch[1] : null;
 
-  // Extract url
+  // Try to extract url from schema first
+  let url = null;
   const urlMatch = datasourceBlock.match(/url\s*=\s*(.+)/);
-  if (!urlMatch) {
-    throw new Error('No url found in datasource block');
+
+  if (urlMatch) {
+    url = urlMatch[1].trim();
+
+    // Handle env() function
+    const envMatch = url.match(/env\(["']([^"']+)["']\)/);
+    if (envMatch) {
+      const envVar = envMatch[1];
+      url = process.env[envVar];
+    } else {
+      // Remove quotes if present
+      url = url.replace(/^["']|["']$/g, '');
+    }
   }
 
-  let url = urlMatch[1].trim();
+  // If no URL in schema, try prisma.config.ts (Prisma 7)
+  if (!url) {
+    url = loadUrlFromPrismaConfig();
+  }
 
-  // Handle env() function
-  const envMatch = url.match(/env\(["']([^"']+)["']\)/);
-  if (envMatch) {
-    const envVar = envMatch[1];
-    url = process.env[envVar];
-
-    if (!url) {
-      throw new Error(`Environment variable ${envVar} is not defined`);
-    }
-  } else {
-    // Remove quotes if present
-    url = url.replace(/^["']|["']$/g, '');
+  // If still no URL, check DATABASE_URL environment variable directly
+  if (!url) {
+    url = process.env.DATABASE_URL || null;
   }
 
   // Detect PostgreSQL from provider OR from the actual connection URL

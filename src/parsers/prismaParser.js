@@ -1,5 +1,4 @@
 const fs = require('fs');
-const path = require('path');
 
 /**
  * Extract blocks (model or enum) with proper brace matching
@@ -204,16 +203,26 @@ function parseEnumValues(enumBody) {
 }
 
 /**
- * Use Prisma's generated DMMF (Data Model Meta Format) to get model information
+ * Use Prisma's DMMF (Data Model Meta Format) to get model information
  * This is an alternative approach that uses Prisma's own abstraction
- * @param {string} prismaClientPath - Path to generated Prisma Client
+ * In Prisma 7, we use getDMMF from @prisma/internals instead of accessing it from the client
+ * @param {string} schemaPath - Path to Prisma schema file
  * @returns {Object} - Models extracted from DMMF
  */
-async function parsePrismaDMMF(prismaClientPath) {
+async function parsePrismaDMMF(schemaPath) {
   try {
-    // Try to load the generated Prisma Client
-    const prismaClient = require(prismaClientPath);
-    const dmmf = prismaClient.Prisma.dmmf;
+    // In Prisma 7, DMMF is no longer exposed on the client
+    // We need to use getDMMF from @prisma/internals instead
+    const { getDMMF } = require('@prisma/internals');
+    const fs = require('fs');
+
+    // Read the schema file
+    const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+
+    // Get DMMF from the schema
+    const dmmf = await getDMMF({
+      datamodel: schemaContent
+    });
 
     const models = {};
 
@@ -266,7 +275,8 @@ async function parsePrismaDMMF(prismaClientPath) {
 
     return { models, enums: dmmf.datamodel.enums };
   } catch (error) {
-    console.warn('Could not load Prisma Client DMMF, falling back to schema parsing');
+    console.warn('Could not use getDMMF from @prisma/internals, falling back to schema parsing');
+    console.warn('Error:', error.message);
     return null;
   }
 }

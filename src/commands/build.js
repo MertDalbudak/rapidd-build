@@ -34,6 +34,10 @@ class Model {
         return Array.isArray(pkey) ? pkey.join('_') : pkey;
     }
 
+    get fields(){
+        return this.queryBuilder.fields;
+    }
+
     _select = (fields) => this.queryBuilder.select(fields);
     _filter = (q) => this.queryBuilder.filter(q);
     _include = (include) => this.queryBuilder.include(include, this.user);
@@ -54,6 +58,7 @@ class Model {
      * @param {number} offset
      * @param {string} sortBy
      * @param {'asc'|'desc'} sortOrder
+     * @param {{}} [options={}]
      * @returns {Promise<Object[]>}
      */
     _getMany = async (q = {}, include = "", limit = 25, offset = 0, sortBy = this.primaryKey, sortOrder = "asc", options = {})=>{
@@ -86,6 +91,7 @@ class Model {
     /**
      * @param {number} id
      * @param {string | Object} include
+     * @param {{}} [options={}]
      * @returns {Promise<{} | null>}
      */
     _get = async (id, include, options = {}) =>{
@@ -129,6 +135,7 @@ class Model {
     }
     /**
      * @param {{}} data
+     * @param {{}} [options={}]
      * @returns {Promise<Object>}
      */
     _create = async (data, options = {}) => {
@@ -151,6 +158,7 @@ class Model {
     /**
      * @param {number} id
      * @param {{}} data
+     * @param {{}} [options={}]
      * @returns {Promise<Object>}
      */
     _update = async (id, data, options = {}) => {
@@ -180,6 +188,28 @@ class Model {
     }
 
     /**
+     * @param {{}} data
+     * @param {string} [unique_key=this.primaryKey]
+     * @param {{}} [options={}]
+     * @returns {Promise<Object>}
+     */
+    async _upsert(data, unique_key = this.primaryKey, options = {}){
+        const createData = data;
+        const updateData = JSON.parse(JSON.stringify(data));
+        this.queryBuilder.create(createData, this.user);
+        this.queryBuilder.update(updateData, this.user);
+        return await this.prisma.upsert({
+            'where': {
+                [unique_key]: data[unique_key]
+            },
+            'create': createData,
+            'update': updateData,
+            'include': this.include('ALL'),
+            ...options
+        });
+    }
+
+    /**
      *
      * @param {string} q
      * @returns {Promise<number>}
@@ -192,6 +222,7 @@ class Model {
 
     /**
      * @param {number} id
+     * @param {{}} [options={}]
      * @returns {Promise<Object>}
      */
     _delete = async (id, options = {}) => {
@@ -231,6 +262,7 @@ class Model {
     /**
      * @param {number} id
      * @param {string | Object} include
+     * @param {{}} [options={}]
      * @returns {Promise<{} | null>}
      */
     async get(id, include, options = {}){
@@ -240,10 +272,21 @@ class Model {
     /**
      * @param {number} id
      * @param {{}} data
+     * @param {{}} [options={}]
      * @returns {Promise<Object>}
      */
     async update(id, data, options = {}){
         return await this._update(id, data, options);
+    }
+
+    /**
+     * @param {{}} data
+     * @param {string} [unique_key=this.primaryKey]
+     * @param {{}} [options={}]
+     * @returns {Promise<Object>}
+     */
+    async upsert(data, unique_key = this.primaryKey, options = {}){
+        return await this._upsert(data, unique_key, options);
     }
 
     /**
@@ -334,15 +377,13 @@ class Model {
     set modelName (name){
         this.name = name;
         this.prisma = prisma[name];
-        this.fields = this.prisma.fields;
     }
 
     static relatedObjects = [];
     static Error = ErrorResponse;
 }
 
-module.exports = {Model, QueryBuilder, prisma};
-`;
+module.exports = {Model, QueryBuilder, prisma};`;
 
   // Ensure src directory exists
   const srcDir = path.dirname(modelJsPath);
@@ -506,12 +547,10 @@ const prisma = basePrisma.$extends({
 async function prismaTransaction(operations) {
     const context = requestContext.getStore();
 
-    if (!context?.userId || !context?.userRole) {
-        return Promise.all(operations);
-    }
-
     return basePrisma.$transaction(async (tx) => {
-        await setRLSVariables(tx, context.userId, context.userRole);
+        if (context?.userId && context?.userRole) {
+            await setRLSVariables(tx, context.userId, context.userRole);
+        }
         return Promise.all(operations.map(op => op(tx)));
     });
 }
@@ -623,7 +662,7 @@ module.exports = {
 /**
  * Update relationships.json for a specific model
  */
-async function updateRelationshipsForModel(filteredModels, relationshipsPath, prismaClientPath, schemaPath, usedDMMF) {
+async function updateRelationshipsForModel(filteredModels, relationshipsPath, schemaPath, usedDMMF) {
   let existingRelationships = {};
 
   // Load existing relationships if file exists
@@ -641,7 +680,7 @@ async function updateRelationshipsForModel(filteredModels, relationshipsPath, pr
     // Use DMMF to get relationships for specific model
     const { generateRelationshipsFromDMMF } = require('../generators/relationshipsGenerator');
     const tempPath = relationshipsPath + '.tmp';
-    await generateRelationshipsFromDMMF(prismaClientPath, tempPath);
+    await generateRelationshipsFromDMMF(schemaPath, tempPath);
     const allRelationships = JSON.parse(fs.readFileSync(tempPath, 'utf8'));
     fs.unlinkSync(tempPath);
 
@@ -835,15 +874,14 @@ async function buildModels(options) {
     console.warn('Continuing with schema parsing fallback...\n');
   }
 
-  // Try to use Prisma DMMF first (if prisma generate has been run)
+  // Try to use Prisma DMMF first (using @prisma/internals getDMMF)
   let parsedData = null;
-  const prismaClientPath = path.join(process.cwd(), 'prisma', 'client');
   let usedDMMF = false;
 
   try {
-    parsedData = await parsePrismaDMMF(prismaClientPath);
+    parsedData = await parsePrismaDMMF(schemaPath);
     if (parsedData) {
-      console.log('Using Prisma generated client (DMMF)');
+      console.log('Using Prisma DMMF (via @prisma/internals)');
       usedDMMF = true;
     }
   } catch (error) {
@@ -899,11 +937,14 @@ async function buildModels(options) {
   }
 
   // Parse datasource to determine database type
-  let datasource = { isPostgreSQL: true };  // Default to PostgreSQL
+  let datasource = { isPostgreSQL: true, url: null };  // Default to PostgreSQL
   try {
     datasource = parseDatasource(schemaPath);
   } catch (error) {
-    console.warn('Could not parse datasource, assuming PostgreSQL:', error.message);
+    // Only warn if it's not the expected "No url found" error in Prisma 7
+    if (!error.message.includes('No url found')) {
+      console.warn('Could not parse datasource, assuming PostgreSQL:', error.message);
+    }
   }
 
   // Generate rapidd/rapidd.js if it doesn't exist
@@ -919,11 +960,11 @@ async function buildModels(options) {
     try {
       if (options.model) {
         // Update only specific model in relationships.json
-        await updateRelationshipsForModel(filteredModels, relationshipsPath, prismaClientPath, schemaPath, usedDMMF);
+        await updateRelationshipsForModel(filteredModels, relationshipsPath, schemaPath, usedDMMF);
       } else {
         // Generate all relationships
         if (usedDMMF) {
-          await generateRelationshipsFromDMMF(prismaClientPath, relationshipsPath);
+          await generateRelationshipsFromDMMF(schemaPath, relationshipsPath);
         } else {
           generateRelationshipsFromSchema(schemaPath, relationshipsPath);
         }
