@@ -58,6 +58,15 @@ class ${className} extends Model {
     }
 
     /**
+     * @param {{}} data
+     * @param {string} [unique_key=this.primaryKey]
+     * @returns {Promise<Object>}
+     */
+    async upsert(data, unique_key = this.primaryKey){
+        return await this._upsert(data, unique_key);
+    }
+
+    /**
      * @param {number} id
      * @returns {Object}
      */

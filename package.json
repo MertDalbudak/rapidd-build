@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Dynamic code generator that transforms Prisma schemas into Express.js CRUD APIs with PostgreSQL RLS-to-JavaScript translation",
   "main": "index.js",
   "bin": {
@@ -49,13 +49,13 @@
     "README.md"
   ],
   "dependencies": {
-    "@prisma/adapter-planetscale": "^7.0.1",
+    "@prisma/adapter-mariadb": "^7.0.1",
+    "@prisma/adapter-pg": "^7.0.1",
     "@prisma/client": "^7.0.0",
     "@prisma/internals": "^7.0.0",
     "commander": "^11.0.0",
     "dotenv": "^16.0.0",
-    "pg": "^8.16.3",
-    "undici": "^7.16.0"
+    "pg": "^8.16.3"
   },
   "devDependencies": {
     "prisma": "^7.0.0"
