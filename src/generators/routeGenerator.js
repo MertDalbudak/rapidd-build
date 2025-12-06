@@ -7,7 +7,10 @@ const path = require('path');
  * @returns {string} - Generated route code
  */
 function generateRouteFile(modelName) {
-  const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+  const className = modelName.split(/[^a-zA-Z0-9]+/)        // split on any non-alphanumeric char
+    .filter(Boolean)               // remove empty parts
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('');
 
   return `const router = require('express').Router();
 const {${className}, QueryBuilder, prisma} = require('../../../src/Model/${className}');
@@ -104,9 +107,9 @@ function generateAllRoutes(models, routesDir) {
   // Generate individual route files
   for (const modelName of Object.keys(models)) {
     const routeCode = generateRouteFile(modelName);
-    const routePath = path.join(routesDir, `${modelName.toLowerCase()}.js`);
+    const routePath = path.join(routesDir, `${modelName}.js`);
     fs.writeFileSync(routePath, routeCode);
-    console.log(`Generated route: ${modelName.toLowerCase()}.js`);
+    console.log(`Generated route: ${modelName}.js`);
   }
 }
 

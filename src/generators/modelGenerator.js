@@ -9,13 +9,16 @@ const path = require('path');
  */
 function generateModelFile(modelName, modelInfo) {
   // Capitalize first letter for class name
-  const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+  const className = modelName.split(/[^a-zA-Z0-9]+/)        // split on any non-alphanumeric char
+    .filter(Boolean)               // remove empty parts
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('');
 
   return `const {Model, QueryBuilder, prisma} = require('../Model');
 
 class ${className} extends Model {
     constructor(options){
-        super('${className}', options);
+        super('${modelName}', options);
     }
 
     /**
@@ -131,7 +134,10 @@ function generateAllModels(models, modelDir, modelJsPath) {
   for (const [modelName, modelInfo] of Object.entries(models)) {
     const modelCode = generateModelFile(modelName, modelInfo);
     // Capitalize first letter for filename
-    const className = modelName.charAt(0).toUpperCase() + modelName.slice(1);
+    const className = modelName.split(/[^a-zA-Z0-9]+/)        // split on any non-alphanumeric char
+    .filter(Boolean)               // remove empty parts
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+    .join('');
     const modelPath = path.join(modelDir, `${className}.js`);
     fs.writeFileSync(modelPath, modelCode);
     console.log(`Generated model: ${className}.js`);
