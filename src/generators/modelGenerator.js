@@ -28,7 +28,7 @@ class ${className} extends Model {
      * @param {number} offset
      * @param {string} sortBy
      * @param {'asc'|'desc'} sortOrder
-     * @returns {Object[]}
+     * @returns {Promise<Object[]>}
      */
     async getMany(q = {}, include = "", limit = 25, offset = 0, sortBy = "id", sortOrder = "asc"){
         return await this._getMany(q, include, Number(limit), Number(offset), sortBy, sortOrder);
@@ -37,7 +37,7 @@ class ${className} extends Model {
     /**
      * @param {number} id
      * @param {string | Object} include
-     * @returns {{} | null}
+     * @returns {Promise<Object | null>}
      */
     async get(id, include){
         return await this._get(id, include);
@@ -45,7 +45,7 @@ class ${className} extends Model {
 
     /**
      * @param {Object} data
-     * @returns  {Object}
+     * @returns  {Promise<Object>}
      */
     async create(data){
         return await this._create(data);
@@ -54,7 +54,7 @@ class ${className} extends Model {
     /**
      * @param {number} id
      * @param {{}} data
-     * @returns {Object}
+     * @returns {Promise<Object>}
      */
     async update(id, data){
         return await this._update(id, data);
@@ -92,6 +92,8 @@ class ${className} extends Model {
     include(include){
         return this._include(include);
     }
+
+    static QueryBuilder = new QueryBuilder('${modelName}');
 }
 
 module.exports = {${className}, QueryBuilder, prisma};
