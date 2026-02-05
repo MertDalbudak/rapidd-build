@@ -3,7 +3,40 @@
  * Uses extensive regex patterns to extract meaning from SQL expressions
  */
 
-class DeepSQLAnalyzer {
+export interface SQLFilter {
+  type: string;
+  field?: string;
+  value?: string;
+  values?: string[];
+  userField?: string;
+  prisma: string;
+  subquery?: string;
+}
+
+export interface SQLCondition {
+  type: string;
+  roles?: string[];
+  role?: string;
+  javascript?: string;
+  table?: string;
+  field?: string;
+  condition?: string;
+  conditions?: Array<{ condition: string; result: string }>;
+  subquery?: string;
+  prisma?: string;
+}
+
+export interface SQLAnalysis {
+  filters: SQLFilter[];
+  conditions: SQLCondition[];
+  userContext: Record<string, boolean>;
+  sql?: string;
+}
+
+export class DeepSQLAnalyzer {
+  functionMappings: Record<string, string>;
+  sessionMappings: Record<string, string>;
+
   constructor() {
     // Common PostgreSQL function patterns mapped to user fields
     this.functionMappings = {
@@ -70,12 +103,12 @@ class DeepSQLAnalyzer {
   /**
    * Analyze SQL expression and extract Prisma filters
    */
-  analyzeSQLForFilters(sql) {
+  analyzeSQLForFilters(sql: string): SQLAnalysis {
     if (!sql || sql.trim() === '') {
       return { filters: [], conditions: [], userContext: {} };
     }
 
-    const analysis = {
+    const analysis: SQLAnalysis = {
       filters: [],
       conditions: [],
       userContext: {}
@@ -107,7 +140,7 @@ class DeepSQLAnalyzer {
   /**
    * Normalize SQL for easier parsing
    */
-  normalizeSql(sql) {
+  normalizeSql(sql: string): string {
     let normalized = sql
       .replace(/\s+/g, ' ')
       .replace(/\n/g, ' ')
@@ -146,7 +179,7 @@ class DeepSQLAnalyzer {
   /**
    * Remove EXISTS subqueries with proper parentheses matching
    */
-  removeExistsSubqueries(sql) {
+  removeExistsSubqueries(sql: string): string {
     let result = sql;
     let changed = true;
 
@@ -179,7 +212,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract direct field comparisons
    */
-  extractDirectComparisons(sql, analysis) {
+  extractDirectComparisons(sql: string, analysis: SQLAnalysis): void {
     // Pattern: field = 'value' (with or without quotes on field name)
     const stringPattern = /(?:"?(\w+)"?)\s*=\s*'([^']+)'/gi;
     let match;
@@ -257,7 +290,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract function-based comparisons
    */
-  extractFunctionComparisons(sql, analysis) {
+  extractFunctionComparisons(sql: string, analysis: SQLAnalysis): void {
     // Pattern: field = function() (with or without quotes on field name)
     const patterns = [
       /(?:"?(\w+)"?)\s*=\s*([\w.]+)\s*\(\s*\)/gi,  // field = function()
@@ -265,13 +298,13 @@ class DeepSQLAnalyzer {
     ];
 
     // Normalize dots in function names for lookup
-    const normalizeFuncName = (name) => name.replace(/\./g, '_');
+    const normalizeFuncName = (name: string): string => name.replace(/\./g, '_');
 
     for (let i = 0; i < patterns.length; i++) {
       const pattern = patterns[i];
       let match;
       while ((match = pattern.exec(sql)) !== null) {
-        let field, funcName;
+        let field: string, funcName: string;
 
         // First pattern is: field = function()
         // Second pattern is: function() = field
@@ -312,7 +345,7 @@ class DeepSQLAnalyzer {
           });
 
           // Track user context requirements
-          const contextKey = `requires${userField.charAt(0).toUpperCase()}${userField.slice(1).replace(/_(.)/g, (_, c) => c.toUpperCase())}`;
+          const contextKey = `requires${userField.charAt(0).toUpperCase()}${userField.slice(1).replace(/_(.)/g, (_, c: string) => c.toUpperCase())}`;
           analysis.userContext[contextKey] = true;
         }
       }
@@ -341,7 +374,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract session variable comparisons
    */
-  extractSessionVariableComparisons(sql, analysis) {
+  extractSessionVariableComparisons(sql: string, analysis: SQLAnalysis): void {
     // Pattern: field = current_setting('...')
     const patterns = [
       /(\w+)\s*=\s*(?:\(?\s*current_setting\s*\(\s*'([^']+)'[^)]*\)\s*\)?)/gi,
@@ -352,7 +385,7 @@ class DeepSQLAnalyzer {
       const pattern = patterns[i];
       let match;
       while ((match = pattern.exec(sql)) !== null) {
-        let field, setting;
+        let field: string, setting: string;
 
         // First pattern: field = current_setting(...)
         // Second pattern: current_setting(...) = field
@@ -378,7 +411,7 @@ class DeepSQLAnalyzer {
           });
 
           // Track user context requirements
-          const contextKey = `requires${userField.charAt(0).toUpperCase()}${userField.slice(1).replace(/_(.)/g, (_, c) => c.toUpperCase())}`;
+          const contextKey = `requires${userField.charAt(0).toUpperCase()}${userField.slice(1).replace(/_(.)/g, (_, c: string) => c.toUpperCase())}`;
           analysis.userContext[contextKey] = true;
         }
       }
@@ -388,7 +421,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract IN clauses
    */
-  extractInClauses(sql, analysis) {
+  extractInClauses(sql: string, analysis: SQLAnalysis): void {
     // Pattern: field IN (values)
     const inPattern = /(\w+)\s+IN\s*\(([^)]+)\)/gi;
     let match;
@@ -418,7 +451,7 @@ class DeepSQLAnalyzer {
           .map(v => v.trim().replace(/'/g, ''));
 
         const quotedValues = valueList.map(v =>
-          isNaN(v) && v !== 'true' && v !== 'false' ? `'${v}'` : v
+          isNaN(Number(v)) && v !== 'true' && v !== 'false' ? `'${v}'` : v
         );
 
         analysis.filters.push({
@@ -434,7 +467,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract EXISTS subqueries
    */
-  extractExistsSubqueries(sql, analysis) {
+  extractExistsSubqueries(sql: string, analysis: SQLAnalysis): void {
     const existsPattern = /EXISTS\s*\(([^)]+(?:\([^)]*\)[^)]*)*)\)/gi;
     let match;
 
@@ -462,12 +495,12 @@ class DeepSQLAnalyzer {
   /**
    * Extract CASE WHEN conditions
    */
-  extractCaseWhenConditions(sql, analysis) {
+  extractCaseWhenConditions(sql: string, analysis: SQLAnalysis): void {
     const casePattern = /CASE\s+WHEN\s+([^THEN]+)\s+THEN\s+([^WHEN|ELSE|END]+)(?:\s+WHEN\s+([^THEN]+)\s+THEN\s+([^WHEN|ELSE|END]+))*(?:\s+ELSE\s+([^END]+))?\s+END/gi;
     let match;
 
     while ((match = casePattern.exec(sql)) !== null) {
-      const conditions = [];
+      const conditions: Array<{ condition: string; result: string }> = [];
 
       // Extract WHEN conditions
       const whenPattern = /WHEN\s+([^THEN]+)\s+THEN\s+([^WHEN|ELSE|END]+)/gi;
@@ -496,7 +529,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract role-based checks
    */
-  extractRoleChecks(sql, analysis) {
+  extractRoleChecks(sql: string, analysis: SQLAnalysis): void {
     // Pattern: (function()) = ANY((ARRAY[...])) or function() = ANY(ARRAY[...])
     // Handle optional wrapping parens around function and multiple parens around ARRAY
     const anyArrayPattern = /\(?([\w.]+)\s*\(\s*\)\)?\s*=\s*ANY\s*\(+\s*(?:ARRAY\s*)?\[([^\]]+)\]/gi;
@@ -526,7 +559,7 @@ class DeepSQLAnalyzer {
   /**
    * Extract complex JOIN conditions
    */
-  extractComplexJoins(sql, analysis) {
+  extractComplexJoins(sql: string, analysis: SQLAnalysis): void {
     // Look for patterns that suggest relationships
     const relationPatterns = [
       // user owns resource through intermediate table
@@ -551,4 +584,4 @@ class DeepSQLAnalyzer {
   }
 }
 
-module.exports = DeepSQLAnalyzer;
+export default DeepSQLAnalyzer;

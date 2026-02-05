@@ -6,7 +6,10 @@ yarn.lock
 # Build outputs
 dist/
 build/
+
+# Generated test outputs
 output/
+routes/
 
 # IDE
 .vscode/
@@ -37,3 +40,7 @@ coverage/
 
 # Prisma (for testing)
 prisma/
+prisma.config.ts
+
+# Debug outputs
+acl-mappings.json

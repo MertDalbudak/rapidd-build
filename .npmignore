@@ -1,20 +1,23 @@
-# Test files
-test-*.js
-debug-*.js
-verify-*.js
-*.test.js
-*.spec.js
+# Source files (compiled to dist/)
+src/
+bin/
+index.ts
+tsconfig.json
 
-# Test directories
+# Test files
+*.test.ts
+*.spec.ts
 test/
 tests/
-test-*/
 output/
+routes/
 
 # Development
 .env
 .env.*
 !.env.example
+prisma/
+prisma.config.ts
 
 # IDE
 .vscode/
@@ -22,29 +25,18 @@ output/
 *.swp
 *.swo
 *~
+.claude/
 
 # OS
 .DS_Store
 Thumbs.db
 
 # Logs
-logs/
 *.log
-npm-debug.log*
-
-# Dependencies
-node_modules/
-
-# Build artifacts
-dist/
-build/
-
-# Prisma
-prisma/migrations/
-.env
-prisma/dev.db
-prisma/dev.db-journal
 
 # Git
 .git/
 .gitignore
+
+# Debug outputs
+acl-mappings.json

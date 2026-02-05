@@ -2,17 +2,29 @@
  * Enhanced RLS Converter using Deep SQL Analysis
  */
 
-const DeepSQLAnalyzer = require('./deepSQLAnalyzer');
-const PrismaFilterBuilder = require('./prismaFilterBuilder');
+import { DeepSQLAnalyzer, SQLAnalysis } from './deepSQLAnalyzer';
+import { PrismaFilterBuilder, ModelInfo, RelationshipInfo } from './prismaFilterBuilder';
 
-function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, models = {}, relationships = {}) {
+export interface EnhancedConverter {
+  convertToJavaScript: (sql: string, dataVar?: string, userVar?: string, modelName?: string | null) => string;
+  convertToPrismaFilter: (sql: string, userVar?: string, modelName?: string | null) => string;
+  getUserContextRequirements: (sql: string) => Record<string, boolean>;
+  analyzer: DeepSQLAnalyzer;
+}
+
+export function createEnhancedConverter(
+  functionMappings: Record<string, unknown> = {},
+  sessionVariables: string[] | Record<string, unknown> = {},
+  models: Record<string, ModelInfo> = {},
+  relationships: Record<string, Record<string, RelationshipInfo>> = {}
+): EnhancedConverter {
   const analyzer = new DeepSQLAnalyzer();
   const filterBuilder = new PrismaFilterBuilder(models, relationships);
 
   /**
    * Convert PostgreSQL RLS to JavaScript with deep analysis
    */
-  function convertToJavaScript(sql, dataVar = 'data', userVar = 'user', modelName = null) {
+  function convertToJavaScript(sql: string, dataVar: string = 'data', userVar: string = 'user', modelName: string | null = null): string {
     if (!sql || sql.trim() === '') {
       return 'true';
     }
@@ -27,7 +39,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
     }
 
     // Fallback to simple JavaScript generation
-    const conditions = [];
+    const conditions: string[] = [];
 
     // Add filter-based conditions
     for (const filter of analysis.filters) {
@@ -38,7 +50,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
       } else {
         switch (filter.type) {
           case 'equal':
-            if (isNaN(filter.value) && filter.value !== 'true' && filter.value !== 'false') {
+            if (isNaN(Number(filter.value)) && filter.value !== 'true' && filter.value !== 'false') {
               conditions.push(`${dataVar}?.${filter.field} === '${filter.value}'`);
             } else {
               conditions.push(`${dataVar}?.${filter.field} === ${filter.value}`);
@@ -54,7 +66,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
             conditions.push(`${dataVar}?.${filter.field} !== null`);
             break;
           case 'in':
-            conditions.push(`[${filter.values.join(', ')}].includes(${dataVar}?.${filter.field})`);
+            conditions.push(`[${filter.values!.join(', ')}].includes(${dataVar}?.${filter.field})`);
             break;
         }
       }
@@ -67,22 +79,22 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
         const jsCondition = condition.javascript.replace(/user/g, userVar);
         conditions.push(jsCondition);
       } else if (condition.type === 'role_any') {
-        conditions.push(`[${condition.roles.map(r => `'${r}'`).join(', ')}].includes(${userVar}?.role)`);
+        conditions.push(`[${condition.roles!.map(r => `'${r}'`).join(', ')}].includes(${userVar}?.role)`);
       } else if (condition.type === 'role_equal') {
         conditions.push(`${userVar}?.role === '${condition.role}'`);
       }
     }
 
     // Handle OR/AND logic in original SQL
-    sql = sql.trim().replace(/\s+/g, ' ');
+    const normalizedSql = sql.trim().replace(/\s+/g, ' ');
 
     // Check if the entire expression is OR'd
-    if (sql.includes(' OR ') && !sql.includes(' AND ')) {
+    if (normalizedSql.includes(' OR ') && !normalizedSql.includes(' AND ')) {
       // If we have multiple conditions and SQL uses OR, join with ||
       if (conditions.length > 1) {
         return conditions.join(' || ');
       }
-    } else if (sql.includes(' AND ') && conditions.length > 1) {
+    } else if (normalizedSql.includes(' AND ') && conditions.length > 1) {
       // If SQL uses AND, wrap in parentheses for clarity
       return '(' + conditions.join(' && ') + ')';
     }
@@ -94,7 +106,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
   /**
    * Convert to Prisma filter with deep analysis
    */
-  function convertToPrismaFilter(sql, userVar = 'user', modelName = null) {
+  function convertToPrismaFilter(sql: string, userVar: string = 'user', modelName: string | null = null): string {
     if (!sql || sql.trim() === '') return '{}';
 
     // Use deep analysis
@@ -107,7 +119,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
     }
 
     // Fallback to simple filter generation
-    const filters = [];
+    const filters: string[] = [];
 
     for (const filter of analysis.filters) {
       if (filter.type.startsWith('user_') || filter.type.startsWith('session_')) {
@@ -117,7 +129,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
       } else {
         switch (filter.type) {
           case 'equal':
-            if (isNaN(filter.value) && filter.value !== 'true' && filter.value !== 'false') {
+            if (isNaN(Number(filter.value)) && filter.value !== 'true' && filter.value !== 'false') {
               filters.push(`{ ${filter.field}: '${filter.value}' }`);
             } else {
               filters.push(`{ ${filter.field}: ${filter.value} }`);
@@ -133,7 +145,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
             filters.push(`{ ${filter.field}: { not: null } }`);
             break;
           case 'in':
-            filters.push(`{ ${filter.field}: { in: [${filter.values.join(', ')}] } }`);
+            filters.push(`{ ${filter.field}: { in: [${filter.values!.join(', ')}] } }`);
             break;
         }
       }
@@ -151,9 +163,9 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
     }
 
     // Check if original SQL uses OR or AND
-    sql = sql.trim().replace(/\s+/g, ' ');
+    const normalizedSql = sql.trim().replace(/\s+/g, ' ');
 
-    if (sql.includes(' OR ') && !sql.includes(' AND ')) {
+    if (normalizedSql.includes(' OR ') && !normalizedSql.includes(' AND ')) {
       // Use OR for multiple filters
       return `{ OR: [${filters.join(', ')}] }`;
     }
@@ -165,7 +177,7 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
   /**
    * Analyze and get user context requirements
    */
-  function getUserContextRequirements(sql) {
+  function getUserContextRequirements(sql: string): Record<string, boolean> {
     const analysis = analyzer.analyzeSQLForFilters(sql);
     return analysis.userContext || {};
   }
@@ -178,4 +190,4 @@ function createEnhancedConverter(functionMappings = {}, sessionVariables = {}, m
   };
 }
 
-module.exports = { createEnhancedConverter };
+export { createEnhancedConverter as default };

@@ -1,14 +1,18 @@
 {
   "name": "@rapidd/build",
-  "version": "1.2.3",
-  "description": "Dynamic code generator that transforms Prisma schemas into Express.js CRUD APIs with PostgreSQL RLS-to-JavaScript translation",
-  "main": "index.js",
+  "version": "2.0.0",
+  "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with PostgreSQL RLS-to-TypeScript translation",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
   "bin": {
-    "rapidd": "./bin/cli.js"
+    "rapidd": "./dist/bin/cli.js"
   },
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "prepublishOnly": "echo 'Ready to publish'"
+    "build": "tsc",
+    "clean": "rm -rf dist/ output/ routes/ acl-mappings.json",
+    "dev": "tsx bin/cli.ts",
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
     "type": "git",
@@ -23,7 +27,8 @@
     "prisma",
     "code-generation",
     "orm",
-    "express",
+    "fastify",
+    "typescript",
     "routes",
     "rls",
     "row-level-security",
@@ -40,13 +45,12 @@
   "author": "Rapidd Team",
   "license": "MIT",
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
   "files": [
-    "bin/",
-    "src/",
-    "index.js",
-    "README.md"
+    "dist/",
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "@prisma/adapter-mariadb": "^7.0.1",
@@ -58,7 +62,11 @@
     "pg": "^8.16.3"
   },
   "devDependencies": {
-    "prisma": "^7.0.0"
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.0.0",
+    "prisma": "^7.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.5.0"
   },
   "peerDependencies": {
     "@prisma/client": "^7.0.0"

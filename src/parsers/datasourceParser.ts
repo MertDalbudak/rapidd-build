@@ -1,18 +1,24 @@
-const fs = require('fs');
-const path = require('path');
+import * as fs from 'fs';
+import * as path from 'path';
 
 // Load .env file if it exists
 try {
   require('dotenv').config({ path: path.join(process.cwd(), '.env') });
-} catch (e) {
+} catch (_e) {
   // dotenv not available, skip
+}
+
+export interface DatasourceConfig {
+  provider: string | null;
+  url: string | null;
+  isPostgreSQL: boolean;
+  isMySQL: boolean;
 }
 
 /**
  * Try to load DATABASE_URL from prisma.config.ts (Prisma 7)
- * @returns {string|null} - Database URL or null if not found
  */
-function loadUrlFromPrismaConfig() {
+function loadUrlFromPrismaConfig(): string | null {
   const configPath = path.join(process.cwd(), 'prisma.config.ts');
 
   if (!fs.existsSync(configPath)) {
@@ -34,7 +40,7 @@ function loadUrlFromPrismaConfig() {
     if (urlMatch) {
       return urlMatch[1];
     }
-  } catch (e) {
+  } catch (_e) {
     // Failed to read config, return null
   }
 
@@ -43,10 +49,8 @@ function loadUrlFromPrismaConfig() {
 
 /**
  * Parse datasource configuration from Prisma schema
- * @param {string} schemaPath - Path to Prisma schema file
- * @returns {Object} - Datasource configuration with resolved URL
  */
-function parseDatasource(schemaPath) {
+export function parseDatasource(schemaPath: string): DatasourceConfig {
   const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
 
   // Extract datasource block
@@ -64,7 +68,7 @@ function parseDatasource(schemaPath) {
   const provider = providerMatch ? providerMatch[1] : null;
 
   // Try to extract url from schema first
-  let url = null;
+  let url: string | null = null;
   const urlMatch = datasourceBlock.match(/url\s*=\s*(.+)/);
 
   if (urlMatch) {
@@ -74,7 +78,7 @@ function parseDatasource(schemaPath) {
     const envMatch = url.match(/env\(["']([^"']+)["']\)/);
     if (envMatch) {
       const envVar = envMatch[1];
-      url = process.env[envVar];
+      url = process.env[envVar] || null;
     } else {
       // Remove quotes if present
       url = url.replace(/^["']|["']$/g, '');
@@ -92,7 +96,6 @@ function parseDatasource(schemaPath) {
   }
 
   // Detect PostgreSQL from provider OR from the actual connection URL
-  // This is important because the schema might say "mysql" but DATABASE_URL could be postgresql://
   let isPostgreSQL = provider === 'postgresql' || provider === 'postgres';
 
   if (!isPostgreSQL && url) {
@@ -101,7 +104,7 @@ function parseDatasource(schemaPath) {
   }
 
   // Explicitly detect MySQL to avoid false PostgreSQL detection
-  const isMySQL = provider === 'mysql' || (url && url.startsWith('mysql://'));
+  const isMySQL = provider === 'mysql' || (!!url && url.startsWith('mysql://'));
 
   // If it's MySQL, ensure isPostgreSQL is false
   if (isMySQL) {
@@ -115,7 +118,3 @@ function parseDatasource(schemaPath) {
     isMySQL
   };
 }
-
-module.exports = {
-  parseDatasource
-};

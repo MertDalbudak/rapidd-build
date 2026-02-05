@@ -3,8 +3,56 @@
  * Generates correct Prisma filter syntax based on schema relationships
  */
 
-class PrismaFilterBuilder {
-  constructor(models, relationships) {
+import type { SQLAnalysis, SQLFilter } from './deepSQLAnalyzer';
+
+export interface ModelField {
+  type: string;
+  optional: boolean;
+  isArray: boolean;
+  isRelation: boolean;
+  isId?: boolean;
+  isUnique?: boolean;
+  isUpdatedAt?: boolean;
+  hasDefaultValue?: boolean;
+  attributes?: string;
+  kind?: string;
+  relationName?: string;
+  relationFromFields?: string[];
+  relationToFields?: string[];
+}
+
+export interface ModelRelation {
+  name: string;
+  type: string;
+  isArray: boolean;
+  optional: boolean;
+  relationName?: string;
+  relationFromFields?: string[];
+  relationToFields?: string[];
+  kind?: string;
+}
+
+export interface ModelInfo {
+  name: string;
+  fields: Record<string, ModelField>;
+  relations: ModelRelation[];
+  compositeKey: string[] | null;
+  dbName: string;
+}
+
+export interface RelationshipInfo {
+  object: string;
+  field: string;
+  fields?: string[];
+}
+
+export class PrismaFilterBuilder {
+  models: Record<string, ModelInfo>;
+  relationships: Record<string, Record<string, RelationshipInfo>>;
+  userModel: ModelInfo | null;
+  userModelName: string | null;
+
+  constructor(models: Record<string, ModelInfo>, relationships: Record<string, Record<string, RelationshipInfo>>) {
     this.models = models;
     this.relationships = relationships || {};
 
@@ -22,18 +70,13 @@ class PrismaFilterBuilder {
 
   /**
    * Build a Prisma filter from SQL RLS analysis
-   * @param {string} modelName - The model to build filter for
-   * @param {Object} analysis - SQL analysis from DeepSQLAnalyzer
-   * @param {string} userVar - User variable name (default: 'user')
-   * @returns {string} - Prisma filter code
    */
-  buildFilter(modelName, analysis, userVar = 'user') {
+  buildFilter(modelName: string, analysis: SQLAnalysis, userVar: string = 'user'): string {
     if (!analysis.filters || analysis.filters.length === 0) {
       return '{}';
     }
 
-    const filters = [];
-    const modelInfo = this.models[modelName];
+    const filters: string[] = [];
 
     for (const filter of analysis.filters) {
       if (filter.type.startsWith('user_') || filter.type.startsWith('session_')) {
@@ -45,19 +88,20 @@ class PrismaFilterBuilder {
           continue;
         }
 
-        const prismaFilter = this.buildUserFieldFilter(modelName, filter.field, userField, userVar);
+        const prismaFilter = this.buildUserFieldFilter(modelName, filter.field!, userField, userVar);
         if (prismaFilter) {
           filters.push(prismaFilter);
         }
       } else {
         // Direct field comparison
         switch (filter.type) {
-          case 'equal':
-            const value = isNaN(filter.value) && filter.value !== 'true' && filter.value !== 'false'
+          case 'equal': {
+            const value = isNaN(Number(filter.value)) && filter.value !== 'true' && filter.value !== 'false'
               ? `'${filter.value}'`
               : filter.value;
             filters.push(`{ ${filter.field}: ${value} }`);
             break;
+          }
           case 'not_equal':
             filters.push(`{ ${filter.field}: { not: '${filter.value}' } }`);
             break;
@@ -68,7 +112,7 @@ class PrismaFilterBuilder {
             filters.push(`{ ${filter.field}: { not: null } }`);
             break;
           case 'in':
-            filters.push(`{ ${filter.field}: { in: [${filter.values.join(', ')}] } }`);
+            filters.push(`{ ${filter.field}: { in: [${filter.values!.join(', ')}] } }`);
             break;
         }
       }
@@ -86,10 +130,11 @@ class PrismaFilterBuilder {
       const roleConditions = analysis.conditions.filter(c => c.type === 'role_any' || c.type === 'role_equal');
       const roleChecks = roleConditions.map(c => {
         if (c.type === 'role_any') {
-          return `[${c.roles.map(r => `'${r}'`).join(', ')}].includes(${userVar}?.role)`;
+          return `[${c.roles!.map(r => `'${r}'`).join(', ')}].includes(${userVar}?.role)`;
         } else if (c.type === 'role_equal') {
           return `${userVar}?.role === '${c.role}'`;
         }
+        return null;
       }).filter(Boolean);
 
       const roleCheck = roleChecks.length > 1 ? `(${roleChecks.join(' || ')})` : roleChecks[0];
@@ -119,13 +164,8 @@ class PrismaFilterBuilder {
 
   /**
    * Build filter for user field comparison (handles relationships)
-   * @param {string} modelName - Current model name
-   * @param {string} fieldName - Field being checked
-   * @param {string} userField - User field to compare against
-   * @param {string} userVar - User variable
-   * @returns {string|null} - Prisma filter or null
    */
-  buildUserFieldFilter(modelName, fieldName, userField, userVar) {
+  buildUserFieldFilter(modelName: string, fieldName: string, userField: string, userVar: string): string | null {
     const modelInfo = this.models[modelName];
     if (!modelInfo) return null;
 
@@ -139,7 +179,6 @@ class PrismaFilterBuilder {
     }
 
     // Check if this is a relationship check
-    // For example: checking if course has a student with student_id = user.student?.id
     const modelRelations = this.relationships[modelName] || {};
 
     // First pass: Look for junction table relationships (prioritize these)
@@ -148,10 +187,7 @@ class PrismaFilterBuilder {
       if (!relatedModel) continue;
 
       // Prioritize many-to-many through junction table
-      // e.g., course -> students (course_student) where student_id = user.student?.id
       if (relationInfo.fields && relationInfo.fields.length > 1) {
-        // This is a junction table relation
-        // Check if one of the junction fields matches what we're looking for
         if (relationInfo.fields.includes(fieldName)) {
           const userFieldPath = this.convertToUserFieldPath(userField, userVar);
           return this.buildRelationFilter(
@@ -171,7 +207,6 @@ class PrismaFilterBuilder {
 
       // Check if the related model has this field
       if (relatedModel.fields[fieldName] && !relatedModel.fields[fieldName].isRelation) {
-        // Found it! Build a relation filter
         const userFieldPath = this.convertToUserFieldPath(userField, userVar);
         return this.buildRelationFilter(
           relationName,
@@ -189,16 +224,8 @@ class PrismaFilterBuilder {
 
   /**
    * Convert user field to proper path
-   * Checks if user model actually has the field before converting to relation path
-   * Examples:
-   *   'id' -> 'user?.id'
-   *   'student_id' (if exists on user) -> 'user?.student_id'
-   *   'student_id' (if NOT exists on user) -> 'user.student?.id'
-   * @param {string} userField - Field name like 'id', 'student_id', 'teacher_id'
-   * @param {string} userVar - User variable name
-   * @returns {string} - Proper user field path
    */
-  convertToUserFieldPath(userField, userVar) {
+  convertToUserFieldPath(userField: string, userVar: string): string {
     // Special case for 'id'
     if (userField === 'id') {
       return `${userVar}?.id`;
@@ -238,14 +265,8 @@ class PrismaFilterBuilder {
 
   /**
    * Build Prisma relation filter
-   * @param {string} relationName - Name of the relation
-   * @param {Object} relationInfo - Relation metadata
-   * @param {string} fieldName - Field to filter on
-   * @param {string} value - Value to compare
-   * @returns {string} - Prisma filter
    */
-  buildRelationFilter(relationName, relationInfo, fieldName, value) {
-    // Determine if this is a one-to-many or many-to-many
+  buildRelationFilter(relationName: string, relationInfo: RelationshipInfo, fieldName: string, value: string): string {
     const relatedModel = this.models[relationInfo.object];
 
     if (!relatedModel) {
@@ -256,13 +277,10 @@ class PrismaFilterBuilder {
     const isJunctionTable = relationInfo.fields && relationInfo.fields.length > 1;
 
     if (isJunctionTable) {
-      // Many-to-many through junction
-      // e.g., { students: { some: { student_id: user?.student_id } } }
       return `{ ${relationName}: { some: { ${fieldName}: ${value} } } }`;
     }
 
     // One-to-many or one-to-one
-    // Check if relationName is plural (array) -> use 'some'
     if (relationName.endsWith('s') || relationInfo.fields) {
       return `{ ${relationName}: { some: { ${fieldName}: ${value} } } }`;
     }
@@ -273,11 +291,8 @@ class PrismaFilterBuilder {
 
   /**
    * Infer relation type from model data
-   * @param {Object} modelInfo - Model information
-   * @param {string} relationName - Relation name
-   * @returns {string} - 'one' | 'many'
    */
-  inferRelationType(modelInfo, relationName) {
+  inferRelationType(modelInfo: ModelInfo | null, relationName: string): 'one' | 'many' {
     if (!modelInfo || !modelInfo.relations) return 'one';
 
     const relation = modelInfo.relations.find(r => r.name === relationName);
@@ -286,15 +301,9 @@ class PrismaFilterBuilder {
 
   /**
    * Build JavaScript equivalent of Prisma filter (for hasAccess)
-   * @param {string} modelName - The model name
-   * @param {Object} analysis - SQL analysis from DeepSQLAnalyzer
-   * @param {string} dataVar - Data variable name
-   * @param {string} userVar - User variable name
-   * @returns {string} - JavaScript condition
    */
-  buildJavaScriptCondition(modelName, analysis, dataVar = 'data', userVar = 'user') {
-    const conditions = [];
-    const modelInfo = this.models[modelName];
+  buildJavaScriptCondition(modelName: string, analysis: SQLAnalysis, dataVar: string = 'data', userVar: string = 'user'): string {
+    const conditions: string[] = [];
 
     for (const filter of analysis.filters) {
       if (filter.type.startsWith('user_') || filter.type.startsWith('session_')) {
@@ -305,19 +314,20 @@ class PrismaFilterBuilder {
           continue;
         }
 
-        const jsCondition = this.buildUserFieldJavaScript(modelName, filter.field, userField, dataVar, userVar);
+        const jsCondition = this.buildUserFieldJavaScript(modelName, filter.field!, userField, dataVar, userVar);
         if (jsCondition) {
           conditions.push(jsCondition);
         }
       } else {
         // Direct field comparison
         switch (filter.type) {
-          case 'equal':
-            const value = isNaN(filter.value) && filter.value !== 'true' && filter.value !== 'false'
+          case 'equal': {
+            const value = isNaN(Number(filter.value)) && filter.value !== 'true' && filter.value !== 'false'
               ? `'${filter.value}'`
               : filter.value;
             conditions.push(`${dataVar}?.${filter.field} === ${value}`);
             break;
+          }
         }
       }
     }
@@ -330,7 +340,7 @@ class PrismaFilterBuilder {
           const jsCondition = condition.javascript.replace(/user/g, userVar);
           conditions.push(jsCondition);
         } else if (condition.type === 'role_any') {
-          conditions.push(`[${condition.roles.map(r => `'${r}'`).join(', ')}].includes(${userVar}?.role)`);
+          conditions.push(`[${condition.roles!.map(r => `'${r}'`).join(', ')}].includes(${userVar}?.role)`);
         } else if (condition.type === 'role_equal') {
           conditions.push(`${userVar}?.role === '${condition.role}'`);
         }
@@ -355,14 +365,8 @@ class PrismaFilterBuilder {
 
   /**
    * Build JavaScript condition for user field (handles relations)
-   * @param {string} modelName - Current model name
-   * @param {string} fieldName - Field being checked
-   * @param {string} userField - User field to compare against
-   * @param {string} dataVar - Data variable name
-   * @param {string} userVar - User variable name
-   * @returns {string|null} - JavaScript condition
    */
-  buildUserFieldJavaScript(modelName, fieldName, userField, dataVar, userVar) {
+  buildUserFieldJavaScript(modelName: string, fieldName: string, userField: string, dataVar: string, userVar: string): string | null {
     const modelInfo = this.models[modelName];
     if (!modelInfo) return null;
 
@@ -387,7 +391,6 @@ class PrismaFilterBuilder {
       if (relationInfo.fields && relationInfo.fields.length > 1) {
         if (relationInfo.fields.includes(fieldName)) {
           const userFieldPath = this.convertToUserFieldPath(userField, userVar);
-          // Generate: data?.students?.find(s => s.student_id === user.student?.id)
           return `${dataVar}?.${relationName}?.find(item => item.${fieldName} === ${userFieldPath})`;
         }
       }
@@ -404,10 +407,8 @@ class PrismaFilterBuilder {
 
         // Check if this is an array relation (1:n or n:m)
         if (relationName.endsWith('s') || (relationInfo.fields && relationInfo.fields.length > 1)) {
-          // Use .find() for array relations
           return `${dataVar}?.${relationName}?.find(item => item.${fieldName} === ${userFieldPath})`;
         } else {
-          // Singular relation
           return `${dataVar}?.${relationName}?.${fieldName} === ${userFieldPath}`;
         }
       }
@@ -419,4 +420,4 @@ class PrismaFilterBuilder {
   }
 }
 
-module.exports = PrismaFilterBuilder;
+export default PrismaFilterBuilder;

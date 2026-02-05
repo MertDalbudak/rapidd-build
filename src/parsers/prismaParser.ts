@@ -1,13 +1,16 @@
-const fs = require('fs');
+import * as fs from 'fs';
+import type { ModelInfo, ModelField, ModelRelation } from './prismaFilterBuilder';
+
+export interface ParsedSchema {
+  models: Record<string, ModelInfo>;
+  enums: Record<string, string[]>;
+}
 
 /**
  * Extract blocks (model or enum) with proper brace matching
- * @param {string} content - Schema content
- * @param {string} keyword - 'model' or 'enum'
- * @returns {Array} - Array of {name, body} objects
  */
-function extractBlocks(content, keyword) {
-  const blocks = [];
+function extractBlocks(content: string, keyword: string): Array<{ name: string; body: string }> {
+  const blocks: Array<{ name: string; body: string }> = [];
   const regex = new RegExp(`${keyword}\\s+(\\w+)\\s*{`, 'g');
   let match;
 
@@ -33,12 +36,10 @@ function extractBlocks(content, keyword) {
 
 /**
  * Parse Prisma schema file and extract model information
- * @param {string} schemaPath - Path to Prisma schema file
- * @returns {Object} - Object containing models and their fields
  */
-function parsePrismaSchema(schemaPath) {
+export function parsePrismaSchema(schemaPath: string): ParsedSchema {
   const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
-  const models = {};
+  const models: Record<string, ModelInfo> = {};
 
   // Extract models with proper brace matching
   const modelBlocks = extractBlocks(schemaContent, 'model');
@@ -66,7 +67,7 @@ function parsePrismaSchema(schemaPath) {
   }
 
   // Extract enums
-  const enums = {};
+  const enums: Record<string, string[]> = {};
   const enumBlocks = extractBlocks(schemaContent, 'enum');
   for (const { name, body } of enumBlocks) {
     enums[name] = parseEnumValues(body);
@@ -77,10 +78,8 @@ function parsePrismaSchema(schemaPath) {
 
 /**
  * Parse composite key from @@id directive
- * @param {string} modelBody - The content inside model braces
- * @returns {Array|null} - Array of field names in composite key, or null
  */
-function parseCompositeKey(modelBody) {
+function parseCompositeKey(modelBody: string): string[] | null {
   const lines = modelBody.split('\n').map(line => line.trim());
 
   for (const line of lines) {
@@ -97,10 +96,8 @@ function parseCompositeKey(modelBody) {
 
 /**
  * Parse @@map directive to get database table name
- * @param {string} modelBody - The content inside model braces
- * @returns {string|null} - Database table name, or null if no @@map directive
  */
-function parseMapDirective(modelBody) {
+function parseMapDirective(modelBody: string): string | null {
   const lines = modelBody.split('\n').map(line => line.trim());
 
   for (const line of lines) {
@@ -116,11 +113,9 @@ function parseMapDirective(modelBody) {
 
 /**
  * Parse model fields from model body
- * @param {string} modelBody - The content inside model braces
- * @returns {Object} - Field definitions
  */
-function parseModelFields(modelBody) {
-  const fields = {};
+function parseModelFields(modelBody: string): Record<string, ModelField> {
+  const fields: Record<string, ModelField> = {};
   const lines = modelBody.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('@@'));
 
   for (const line of lines) {
@@ -151,11 +146,9 @@ function parseModelFields(modelBody) {
 
 /**
  * Parse model relations
- * @param {string} modelBody - The content inside model braces
- * @returns {Array} - Array of relation definitions
  */
-function parseModelRelations(modelBody) {
-  const relations = [];
+function parseModelRelations(modelBody: string): ModelRelation[] {
+  const relations: ModelRelation[] = [];
   const lines = modelBody.split('\n').map(line => line.trim()).filter(line => line);
 
   for (const line of lines) {
@@ -163,7 +156,7 @@ function parseModelRelations(modelBody) {
 
     const fieldMatch = line.match(/^(\w+)\s+(\w+)(\?|\[\])?\s*(.*)?$/);
     if (fieldMatch) {
-      const [, fieldName, fieldType, modifier, attributes] = fieldMatch;
+      const [, fieldName, fieldType, modifier] = fieldMatch;
 
       // Check if it's a relation (not a Prisma scalar type)
       const scalarTypes = ['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Decimal', 'Json', 'Bytes', 'BigInt'];
@@ -185,11 +178,9 @@ function parseModelRelations(modelBody) {
 
 /**
  * Parse enum values
- * @param {string} enumBody - The content inside enum braces
- * @returns {Array} - Array of enum values
  */
-function parseEnumValues(enumBody) {
-  const values = [];
+function parseEnumValues(enumBody: string): string[] {
+  const values: string[] = [];
   const lines = enumBody.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
 
   for (const line of lines) {
@@ -204,17 +195,12 @@ function parseEnumValues(enumBody) {
 
 /**
  * Use Prisma's DMMF (Data Model Meta Format) to get model information
- * This is an alternative approach that uses Prisma's own abstraction
- * In Prisma 7, we use getDMMF from @prisma/internals instead of accessing it from the client
- * @param {string} schemaPath - Path to Prisma schema file
- * @returns {Object} - Models extracted from DMMF
  */
-async function parsePrismaDMMF(schemaPath) {
+export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema | null> {
   try {
     // In Prisma 7, DMMF is no longer exposed on the client
     // We need to use getDMMF from @prisma/internals instead
     const { getDMMF } = require('@prisma/internals');
-    const fs = require('fs');
 
     // Read the schema file
     const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
@@ -224,7 +210,7 @@ async function parsePrismaDMMF(schemaPath) {
       datamodel: schemaContent
     });
 
-    const models = {};
+    const models: Record<string, ModelInfo> = {};
 
     for (const model of dmmf.datamodel.models) {
       // Extract composite key if present
@@ -276,12 +262,7 @@ async function parsePrismaDMMF(schemaPath) {
     return { models, enums: dmmf.datamodel.enums };
   } catch (error) {
     console.warn('Could not use getDMMF from @prisma/internals, falling back to schema parsing');
-    console.warn('Error:', error.message);
+    console.warn('Error:', (error as Error).message);
     return null;
   }
 }
-
-module.exports = {
-  parsePrismaSchema,
-  parsePrismaDMMF
-};

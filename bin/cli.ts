@@ -1,31 +1,30 @@
 #!/usr/bin/env node
 
-const { Command } = require('commander');
-const path = require('path');
-const { buildModels } = require('../src/commands/build');
+import { Command } from 'commander';
+import { buildModels, BuildOptions } from '../src/commands/build';
 
 const program = new Command();
 
 program
   .name('rapidd')
-  .description('Rapidd build tool for generating model files from Prisma schema')
-  .version('0.1.0');
+  .description('Rapidd build tool for generating TypeScript model files from Prisma schema')
+  .version('2.0.0');
 
 program
   .command('build')
-  .description('Build model files from Prisma schema')
+  .description('Build TypeScript model files, routes, and ACL from Prisma schema')
   .option('-s, --schema <path>', 'Path to Prisma schema file', process.env.PRISMA_SCHEMA_PATH || './prisma/schema.prisma')
   .option('-o, --output <path>', 'Output base directory', './')
   .option('-m, --model <name>', 'Generate/update only specific model (e.g., "account", "user")')
-  .option('--only <component>', 'Generate only specific component: "model", "route", "acl", or "relationship"')
+  .option('--only <component>', 'Generate only specific component: "model", "route", or "acl"')
   .option('--user-table <name>', 'Name of the user table for ACL (default: auto-detect from user/users)')
   .option('--debug', 'Enable debug mode (generates acl-mappings.json)')
-  .action(async (options) => {
+  .action(async (options: BuildOptions) => {
     try {
       await buildModels(options);
       console.log('\n✓ Build completed successfully');
     } catch (error) {
-      console.error('Error building models:', error.message);
+      console.error('Error building models:', (error as Error).message);
       process.exit(1);
     }
   });

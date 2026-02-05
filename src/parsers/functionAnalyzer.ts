@@ -3,14 +3,45 @@
  * Dynamically analyzes PostgreSQL functions and generates JavaScript mappings
  */
 
-const { Client } = require('pg');
+import { Client } from 'pg';
+
+export interface FunctionMapping {
+  type: string;
+  returns: string;
+  description: string;
+}
+
+export interface FunctionAnalysisResult {
+  functionMappings: Record<string, FunctionMapping>;
+  sessionVariables: string[];
+  userContextRequirements: Record<string, boolean | { table: string; lookupField: string; description: string }>;
+}
+
+export interface MappingConfig {
+  generated: string;
+  source: string;
+  functions: Record<string, { javascript: string; description: string; type: string }>;
+  sessionVariables: Record<string, string>;
+  userContext: {
+    required: string[];
+    optional: string[];
+    relationships: Record<string, unknown>;
+  };
+}
+
+interface FunctionBodyAnalysis {
+  mapping: FunctionMapping | null;
+  requiresUserId: boolean;
+  queriesTable: string | null;
+  returnField: string | null;
+  lookupField: string | null;
+  sessionVars: string[];
+}
 
 /**
  * Analyze all PostgreSQL functions used in RLS policies
- * @param {string} databaseUrl - PostgreSQL connection URL
- * @returns {Object} - Function mappings and metadata
  */
-async function analyzeFunctions(databaseUrl) {
+export async function analyzeFunctions(databaseUrl: string | null): Promise<FunctionAnalysisResult> {
   if (!databaseUrl) {
     return {
       functionMappings: {},
@@ -49,12 +80,12 @@ async function analyzeFunctions(databaseUrl) {
       AND function_name NOT LIKE 'current_setting%'
     `);
 
-    const functionNames = functionsQuery.rows.map(r => r.function_name);
+    const functionNames: string[] = functionsQuery.rows.map(r => r.function_name);
 
     // Step 2: Analyze each function's definition
-    const functionMappings = {};
-    const userContextRequirements = {};
-    const sessionVariables = new Set();
+    const functionMappings: Record<string, FunctionMapping> = {};
+    const userContextRequirements: Record<string, boolean | { table: string; lookupField: string; description: string }> = {};
+    const sessionVariables = new Set<string>();
 
     for (const funcName of functionNames) {
       try {
@@ -73,13 +104,15 @@ async function analyzeFunctions(databaseUrl) {
           const func = funcDef.rows[0];
           const analysis = analyzeFunctionBody(func.source, func.return_type);
 
-          functionMappings[funcName] = analysis.mapping;
+          if (analysis.mapping) {
+            functionMappings[funcName] = analysis.mapping;
+          }
 
           // Track what this function requires
           if (analysis.requiresUserId) {
             userContextRequirements.id = true;
           }
-          if (analysis.queriesTable) {
+          if (analysis.queriesTable && analysis.returnField) {
             userContextRequirements[analysis.returnField] = {
               table: analysis.queriesTable,
               lookupField: analysis.lookupField || 'user_id',
@@ -91,7 +124,7 @@ async function analyzeFunctions(databaseUrl) {
           analysis.sessionVars.forEach(v => sessionVariables.add(v));
         }
       } catch (e) {
-        console.warn(`Could not analyze function ${funcName}:`, e.message);
+        console.warn(`Could not analyze function ${funcName}:`, (e as Error).message);
       }
     }
 
@@ -122,9 +155,11 @@ async function analyzeFunctions(databaseUrl) {
   } catch (error) {
     try {
       await client.end();
-    } catch (e) {}
+    } catch (_e) {
+      // ignore
+    }
 
-    console.warn('Could not analyze PostgreSQL functions:', error.message);
+    console.warn('Could not analyze PostgreSQL functions:', (error as Error).message);
     return {
       functionMappings: {},
       sessionVariables: [],
@@ -135,12 +170,9 @@ async function analyzeFunctions(databaseUrl) {
 
 /**
  * Analyze a PostgreSQL function body to understand what it does
- * @param {string} functionBody - The PL/pgSQL function source
- * @param {string} returnType - The return type of the function
- * @returns {Object} - Analysis results
  */
-function analyzeFunctionBody(functionBody, returnType) {
-  const analysis = {
+export function analyzeFunctionBody(functionBody: string, returnType: string): FunctionBodyAnalysis {
+  const analysis: FunctionBodyAnalysis = {
     mapping: null,
     requiresUserId: false,
     queriesTable: null,
@@ -240,10 +272,9 @@ function analyzeFunctionBody(functionBody, returnType) {
 
 /**
  * Generate a function mapping configuration
- * This can be saved to a file for manual adjustment if needed
  */
-function generateMappingConfig(analysisResult) {
-  const config = {
+export function generateMappingConfig(analysisResult: FunctionAnalysisResult): MappingConfig {
+  const config: MappingConfig = {
     // Metadata
     generated: new Date().toISOString(),
     source: 'PostgreSQL function analysis',
@@ -277,7 +308,7 @@ function generateMappingConfig(analysisResult) {
       config.sessionVariables[varName] = 'user.id';
     } else {
       // Infer from variable name
-      const key = varName.split('.').pop().replace(/_/g, '');
+      const key = varName.split('.').pop()!.replace(/_/g, '');
       config.sessionVariables[varName] = `user.${key}`;
     }
   }
@@ -294,9 +325,3 @@ function generateMappingConfig(analysisResult) {
 
   return config;
 }
-
-module.exports = {
-  analyzeFunctions,
-  analyzeFunctionBody,
-  generateMappingConfig
-};
