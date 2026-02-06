@@ -113,32 +113,4 @@ export function generateAllRoutes(models: Record<string, ModelInfo>, routesDir: 
     fs.writeFileSync(routePath, routeCode);
     console.log(`Generated route: ${modelName}.ts`);
   }
-
-  // Generate index.ts for routes
-  const indexContent = generateRoutesIndex(models);
-  fs.writeFileSync(path.join(routesDir, 'index.ts'), indexContent);
-  console.log('Generated routes/index.ts');
-}
-
-/**
- * Generate index.ts that exports all routes
- */
-function generateRoutesIndex(models: Record<string, ModelInfo>): string {
-  const imports: string[] = [];
-  const exports: string[] = [];
-
-  for (const modelName of Object.keys(models)) {
-    const varName = `${modelName}Routes`;
-    imports.push(`import ${varName} from './${modelName}';`);
-    exports.push(`    '${modelName}': ${varName},`);
-  }
-
-  return `${imports.join('\n')}
-
-export const routes = {
-${exports.join('\n')}
-};
-
-export default routes;
-`;
 }
