@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with PostgreSQL RLS-to-TypeScript translation",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -55,8 +55,8 @@
   "dependencies": {
     "@prisma/adapter-mariadb": "^7.0.1",
     "@prisma/adapter-pg": "^7.0.1",
-    "@prisma/client": "^7.0.0",
-    "@prisma/internals": "^7.0.0",
+    "@prisma/client": "^7.0.1",
+    "@prisma/internals": "^7.0.1",
     "commander": "^11.0.0",
     "dotenv": "^16.0.0",
     "pg": "^8.16.3"
@@ -64,11 +64,11 @@
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/pg": "^8.0.0",
-    "prisma": "^7.0.0",
+    "prisma": "^7.0.1",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0"
   },
   "peerDependencies": {
-    "@prisma/client": "^7.0.0"
+    "@prisma/client": "^7.0.1"
   }
 }
