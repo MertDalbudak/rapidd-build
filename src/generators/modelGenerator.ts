@@ -91,26 +91,4 @@ export function generateAllModels(models: Record<string, ModelInfo>, modelDir: s
     fs.writeFileSync(modelPath, modelCode);
     console.log(`Generated model: ${className}.ts`);
   }
-
-  // Generate index.ts for models
-  const indexContent = generateModelsIndex(models);
-  fs.writeFileSync(path.join(modelDir, 'index.ts'), indexContent);
-  console.log('Generated models/index.ts');
-}
-
-/**
- * Generate index.ts that exports all models
- */
-function generateModelsIndex(models: Record<string, ModelInfo>): string {
-  const exports: string[] = [];
-
-  for (const modelName of Object.keys(models)) {
-    const className = toClassName(modelName);
-    exports.push(`export { ${className} } from './${className}';`);
-  }
-
-  exports.push('');
-  exports.push("export { QueryBuilder, prisma } from '../orm/QueryBuilder';");
-
-  return exports.join('\n');
 }
