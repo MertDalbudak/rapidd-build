@@ -216,16 +216,13 @@ function parseEnumValues(enumBody: string): string[] {
  */
 export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema | null> {
   try {
-    const { getDMMF, getSchemaWithPath } = require('@prisma/internals');
+    const { getDMMF } = require('@prisma/internals');
 
-    // Use Prisma 7's schema loader (handles prisma.config.ts and multi-file schemas)
-    const schemaResult = await getSchemaWithPath({
-      schemaPath: { cliProvidedPath: schemaPath }
-    });
+    // Read schema directly to avoid getSchemaWithPath merging with prisma.config.ts
+    const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
 
-    // Pass schemas as [filePath, content] tuples for Prisma 7 compatibility
     const dmmf = await getDMMF({
-      datamodel: schemaResult.schemas
+      datamodel: [[schemaPath, schemaContent]]
     });
 
     const models: Record<string, ModelInfo> = {};
