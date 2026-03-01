@@ -30,5 +30,6 @@ export interface ModelInfo {
   fields: Record<string, ModelField>;
   relations: ModelRelation[];
   compositeKey: string[] | null;
+  uniqueFields: string[][];
   dbName: string;
 }

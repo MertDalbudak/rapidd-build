@@ -62,6 +62,7 @@ export function parsePrismaSchema(schemaPath: string): ParsedSchema {
       fields,
       relations: parseModelRelations(body),
       compositeKey: compositeKeyFields,
+      uniqueFields: parseUniqueFields(body),
       dbName: dbName || name.toLowerCase() // Default to lowercase model name
     };
   }
@@ -92,6 +93,23 @@ function parseCompositeKey(modelBody: string): string[] | null {
   }
 
   return null;
+}
+
+/**
+ * Parse @@unique directives to get compound unique constraints
+ */
+function parseUniqueFields(modelBody: string): string[][] {
+  const result: string[][] = [];
+  const lines = modelBody.split('\n').map(line => line.trim());
+
+  for (const line of lines) {
+    const match = line.match(/^@@unique\(\[([^\]]+)\]\)/);
+    if (match) {
+      result.push(match[1].split(',').map(f => f.trim()));
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -218,11 +236,15 @@ export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema 
         ? model.primaryKey.fields
         : null;
 
+      // Extract compound unique constraints
+      const uniqueFields: string[][] = Array.isArray(model.uniqueFields) ? model.uniqueFields : [];
+
       models[model.name] = {
         name: model.name,
         fields: {},
         relations: [],
         compositeKey,
+        uniqueFields,
         dbName: model.dbName || model.name.toLowerCase() // Use dbName from DMMF or default to lowercase
       };
 

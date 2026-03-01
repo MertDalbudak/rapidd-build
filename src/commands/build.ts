@@ -113,7 +113,7 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
 
   // Generate routes
   if (shouldGenerate.route) {
-    generateAllRoutes(filteredModels, routesDir);
+    generateAllRoutes(filteredModels, routesDir, models);
   }
 
   return { models, enums };
