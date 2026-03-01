@@ -1,6 +1,5 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync } from 'child_process';
 import { parsePrismaSchema, parsePrismaDMMF } from '../parsers/prismaParser';
 import { generateAllModels } from '../generators/modelGenerator';
 import { generateAllRoutes } from '../generators/routeGenerator';
@@ -38,19 +37,6 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
   // Check if schema file exists
   if (!fs.existsSync(schemaPath)) {
     throw new Error(`Prisma schema file not found at: ${schemaPath}`);
-  }
-
-  // Run npx prisma generate first
-  console.log('\nRunning npx prisma generate...');
-  try {
-    execSync(`npx prisma generate --schema=${schemaPath}`, {
-      stdio: 'inherit',
-      cwd: process.cwd()
-    });
-    console.log('Prisma client generated successfully\n');
-  } catch (_error) {
-    console.warn('Warning: Failed to generate Prisma client');
-    console.warn('Continuing with schema parsing fallback...\n');
   }
 
   // Try to use Prisma DMMF first (using @prisma/internals getDMMF)

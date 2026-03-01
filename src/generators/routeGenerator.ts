@@ -29,8 +29,6 @@ function isNumericId(modelInfo: ModelInfo): boolean {
 
 // ─── Junction table detection ────────────────────────────────────────
 
-const AUDIT_FK_FIELDS = ['createdBy', 'updatedBy'];
-
 interface ParentRelation {
   fkField: string;
   parentModel: string;
@@ -43,38 +41,32 @@ interface JunctionInfo {
 
 /**
  * Detect if a model is a junction (n:m) table.
- * A junction table has exactly 2 non-audit, non-self FK relations
- * AND a composite primary key or compound unique constraint covering both FK fields.
+ * A junction table has a composite primary key (@@id) with exactly 2 fields,
+ * where each field maps to a parent relation.
+ * Models with 3+ composite key fields are skipped entirely (no routes generated).
  */
-function detectJunctionTable(modelName: string, modelInfo: ModelInfo): JunctionInfo {
+function detectJunctionTable(_modelName: string, modelInfo: ModelInfo): JunctionInfo {
+  if (!modelInfo.compositeKey || modelInfo.compositeKey.length !== 2) {
+    return { isJunction: false, parentRelations: [] };
+  }
+
+  // Map each composite key field to its parent relation
   const parentRelations: ParentRelation[] = [];
-
-  for (const rel of modelInfo.relations) {
-    if (!rel.relationFromFields || rel.relationFromFields.length === 0) continue;
-    if (rel.type === modelName) continue;
-    const isAudit = rel.relationFromFields.every(f => AUDIT_FK_FIELDS.includes(f));
-    if (isAudit) continue;
-
-    parentRelations.push({
-      fkField: rel.relationFromFields[0],
-      parentModel: rel.type,
-    });
+  for (const keyField of modelInfo.compositeKey) {
+    const rel = modelInfo.relations.find(r =>
+      r.relationFromFields && r.relationFromFields.includes(keyField)
+    );
+    if (rel) {
+      parentRelations.push({
+        fkField: keyField,
+        parentModel: rel.type,
+      });
+    }
   }
 
-  if (parentRelations.length !== 2) {
-    return { isJunction: false, parentRelations };
-  }
-
-  // Require a composite key or compound unique constraint that includes both FK fields
-  const fkFields = parentRelations.map(r => r.fkField);
-  const hasCompositePK = modelInfo.compositeKey !== null &&
-    fkFields.every(f => modelInfo.compositeKey!.includes(f));
-  const hasCompoundUnique = modelInfo.uniqueFields.some(
-    uf => fkFields.every(f => uf.includes(f))
-  );
-
+  // Both composite key fields must map to parent relations
   return {
-    isJunction: hasCompositePK || hasCompoundUnique,
+    isJunction: parentRelations.length === 2,
     parentRelations,
   };
 }
@@ -142,7 +134,7 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
 
     for (let i = 0; i < junction.parentRelations.length; i++) {
       const parentRel = junction.parentRelations[i];
-      const otherRel = junction.parentRelations[1 - i];
+      const otherRels = junction.parentRelations.filter((_, j) => j !== i);
       if (!models[parentRel.parentModel]) continue;
 
       if (!parentSubRoutes.has(parentRel.parentModel)) {
@@ -153,7 +145,7 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
         junctionModelInfo: modelInfo,
         subRouteName: computeSubRouteName(parentRel.parentModel, modelName),
         fkFieldToParent: parentRel.fkField,
-        otherFkField: otherRel.fkField,
+        otherFkField: otherRels[0].fkField,
       });
     }
   }
@@ -503,6 +495,12 @@ export function generateAllRoutes(
   const { junctionModels, parentSubRoutes } = buildJunctionMap(allModels ?? models);
 
   for (const [modelName, modelInfo] of Object.entries(models)) {
+    // Skip models with 3+ composite key fields – no clean RESTful representation
+    if (modelInfo.compositeKey && modelInfo.compositeKey.length > 2) {
+      console.log(`Skipped route (3+ composite key): ${modelName}`);
+      continue;
+    }
+
     // Skip junction tables – they become sub-routes, not standalone files
     if (junctionModels.has(modelName)) {
       console.log(`Skipped route (junction table): ${modelName}`);
