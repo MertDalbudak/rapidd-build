@@ -81,7 +81,7 @@ export class ${className} extends Model {
         return await this._upsertMany(data, unique_key, prismaOptions, options);
     }
 
-    async delete(id: string | number): Promise<Record<string, unknown>> {
+    async delete(id: string | number | Record<string, any>): Promise<Record<string, unknown>> {
         return await this._delete(id);
     }
 
