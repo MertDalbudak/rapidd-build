@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -25,22 +25,25 @@
   "keywords": [
     "rapidd",
     "prisma",
+    "prisma7",
     "code-generation",
+    "codegen",
+    "scaffold",
     "orm",
     "fastify",
     "typescript",
     "routes",
     "crud",
+    "rest-api",
     "api-generator",
-    "postgresql",
-    "mysql",
-    "database",
-    "security",
+    "model-generator",
+    "route-generator",
+    "acl",
     "access-control",
-    "authentication",
-    "authorization"
+    "schema",
+    "dmmf"
   ],
-  "author": "Rapidd Team",
+  "author": "Mert Dalbudak",
   "license": "MIT",
   "engines": {
     "node": ">=18.0.0"
