@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import type { ModelInfo } from '../parsers/prismaFilterBuilder';
+import type { ModelInfo } from '../parsers/types';
 
 /**
  * Convert model name to PascalCase class name
@@ -106,10 +106,14 @@ export function generateAllRoutes(models: Record<string, ModelInfo>, routesDir: 
     fs.mkdirSync(routesDir, { recursive: true });
   }
 
-  // Generate individual route files
+  // Generate individual route files (skip existing)
   for (const modelName of Object.keys(models)) {
-    const routeCode = generateRouteFile(modelName);
     const routePath = path.join(routesDir, `${modelName}.ts`);
+    if (fs.existsSync(routePath)) {
+      console.log(`Skipped route (exists): ${modelName}.ts`);
+      continue;
+    }
+    const routeCode = generateRouteFile(modelName);
     fs.writeFileSync(routePath, routeCode);
     console.log(`Generated route: ${modelName}.ts`);
   }

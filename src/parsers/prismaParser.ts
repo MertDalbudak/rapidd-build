@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import type { ModelInfo, ModelField, ModelRelation } from './prismaFilterBuilder';
+import type { ModelInfo, ModelField, ModelRelation } from './types';
 
 export interface ParsedSchema {
   models: Record<string, ModelInfo>;
@@ -198,16 +198,16 @@ function parseEnumValues(enumBody: string): string[] {
  */
 export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema | null> {
   try {
-    // In Prisma 7, DMMF is no longer exposed on the client
-    // We need to use getDMMF from @prisma/internals instead
-    const { getDMMF } = require('@prisma/internals');
+    const { getDMMF, getSchemaWithPath } = require('@prisma/internals');
 
-    // Read the schema file
-    const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+    // Use Prisma 7's schema loader (handles prisma.config.ts and multi-file schemas)
+    const schemaResult = await getSchemaWithPath({
+      schemaPath: { cliProvidedPath: schemaPath }
+    });
 
-    // Get DMMF from the schema
+    // Pass schemas as [filePath, content] tuples for Prisma 7 compatibility
     const dmmf = await getDMMF({
-      datamodel: schemaContent
+      datamodel: schemaResult.schemas
     });
 
     const models: Record<string, ModelInfo> = {};

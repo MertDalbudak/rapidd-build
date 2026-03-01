@@ -1,14 +1,14 @@
 {
   "name": "@rapidd/build",
   "version": "2.0.3",
-  "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with PostgreSQL RLS-to-TypeScript translation",
+  "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
     "rapidd": "./dist/bin/cli.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && chmod +x dist/bin/cli.js",
     "clean": "rm -rf dist/ output/ routes/ acl-mappings.json",
     "dev": "tsx bin/cli.ts",
     "prepublishOnly": "npm run clean && npm run build",
@@ -30,8 +30,6 @@
     "fastify",
     "typescript",
     "routes",
-    "rls",
-    "row-level-security",
     "crud",
     "api-generator",
     "postgresql",
@@ -53,17 +51,11 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@prisma/adapter-mariadb": "^7.0.1",
-    "@prisma/adapter-pg": "^7.0.1",
-    "@prisma/client": "^7.0.1",
     "@prisma/internals": "^7.0.1",
-    "commander": "^11.0.0",
-    "dotenv": "^16.0.0",
-    "pg": "^8.16.3"
+    "commander": "^11.0.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/pg": "^8.0.0",
     "prisma": "^7.0.1",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0"

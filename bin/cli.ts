@@ -17,8 +17,6 @@ program
   .option('-o, --output <path>', 'Output base directory', './')
   .option('-m, --model <name>', 'Generate/update only specific model (e.g., "account", "user")')
   .option('--only <component>', 'Generate only specific component: "model", "route", or "acl"')
-  .option('--user-table <name>', 'Name of the user table for ACL (default: auto-detect from user/users)')
-  .option('--debug', 'Enable debug mode (generates acl-mappings.json)')
   .action(async (options: BuildOptions) => {
     try {
       await buildModels(options);
