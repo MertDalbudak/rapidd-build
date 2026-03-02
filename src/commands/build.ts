@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { execSync } from 'child_process';
 import { parsePrismaSchema, parsePrismaDMMF } from '../parsers/prismaParser';
 import { generateAllModels } from '../generators/modelGenerator';
 import { generateAllRoutes } from '../generators/routeGenerator';
@@ -37,6 +38,29 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
   // Check if schema file exists
   if (!fs.existsSync(schemaPath)) {
     throw new Error(`Prisma schema file not found at: ${schemaPath}`);
+  }
+
+  // Clean Prisma client output directory if specified in schema
+  const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+  const outputMatch = schemaContent.match(/generator\s+client\s*\{[\s\S]*?output\s*=\s*"([^"]+)"/);
+  if (outputMatch) {
+    const clientOutputDir = path.resolve(path.dirname(schemaPath), outputMatch[1]);
+    if (fs.existsSync(clientOutputDir)) {
+      fs.rmSync(clientOutputDir, { recursive: true });
+      console.log(`Cleaned Prisma client output: ${clientOutputDir}`);
+    }
+  }
+
+  // Run prisma generate to regenerate client
+  console.log('\nRunning npx prisma generate...');
+  try {
+    execSync(`npx prisma generate --schema="${schemaPath}"`, {
+      stdio: 'inherit',
+      cwd: path.dirname(schemaPath)
+    });
+    console.log('Prisma client generated successfully\n');
+  } catch (_error) {
+    console.warn('Warning: Failed to generate Prisma client\n');
   }
 
   // Try to use Prisma DMMF first (using @prisma/internals getDMMF)

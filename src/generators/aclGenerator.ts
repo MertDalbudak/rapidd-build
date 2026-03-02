@@ -49,10 +49,14 @@ const acl: AclConfig = {
 export default acl;
 `;
 
-  // Skip if file already exists
+  // Skip if file already exists and has non-empty model config
   if (fs.existsSync(outputPath)) {
-    console.log('Skipped acl.ts (exists)');
-    return;
+    const existing = fs.readFileSync(outputPath, 'utf-8');
+    const modelBlockMatch = existing.match(/model:\s*\{([\s\S]*?)\}\s*,?\s*\}\s*;/);
+    if (modelBlockMatch && modelBlockMatch[1].trim().length > 0) {
+      console.log('Skipped acl.ts (exists with custom config)');
+      return;
+    }
   }
 
   // Ensure output directory exists

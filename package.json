@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "2.1.3",
+  "version": "2.1.4",
   "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
