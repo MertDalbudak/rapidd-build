@@ -190,7 +190,7 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
             const pagination = process.env.PAGINATION_MODE === 'page'
                 ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
                 : undefined;
-            const results = await model.getMany(q, include, Number(query.limit || '25'), Number(query.offset || '0'), sortBy, sortOrder as 'asc' | 'desc', fields, pagination, totalResults);
+            const results = await model.getMany({ q, include, limit: Number(query.limit || '25'), offset: Number(query.offset || '0'), sortBy, sortOrder, fields, pagination, totalResults });
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
             const response = QueryBuilder.errorHandler(error);
@@ -297,7 +297,7 @@ ${subRouteRegistrations}
             const pagination = process.env.PAGINATION_MODE === 'page'
                 ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
                 : undefined;
-            const results = await model.getMany(q, include, Number(query.limit || '25'), Number(query.offset || '0'), sortBy, sortOrder as 'asc' | 'desc', fields, pagination, totalResults);
+            const results = await model.getMany({ q, include, limit: Number(query.limit || '25'), offset: Number(query.offset || '0'), sortBy, sortOrder, fields, pagination, totalResults });
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
             const response = QueryBuilder.errorHandler(error);
@@ -415,7 +415,7 @@ const ${junctionModelName}Routes: FastifyPluginAsync = async (fastify) => {
             const pagination = process.env.PAGINATION_MODE === 'page'
                 ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
                 : undefined;
-            const results = await model.getMany(filter, include, Number(query.limit || '25'), Number(query.offset || '0'), sortBy, sortOrder as 'asc' | 'desc', fields, pagination, totalResults);
+            const results = await model.getMany({ q: filter, include, limit: Number(query.limit || '25'), offset: Number(query.offset || '0'), sortBy, sortOrder, fields, pagination, totalResults });
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
             const response = QueryBuilder.errorHandler(error);

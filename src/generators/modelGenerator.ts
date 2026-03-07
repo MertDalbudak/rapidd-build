@@ -21,23 +21,11 @@ export function generateModelFile(modelName: string, _modelInfo: ModelInfo): str
 
   return `import { Model } from '../orm/Model';
 import { QueryBuilder, prisma } from '../orm/QueryBuilder';
-import type { ModelOptions, GetManyResult, UpsertManyOptions, UpsertManyResult } from '../types';
+import type { ModelOptions, UpsertManyOptions, UpsertManyResult } from '../types';
 
 export class ${className} extends Model {
     constructor(options?: ModelOptions) {
         super('${modelName}', options);
-    }
-
-    async getMany(
-        q: Record<string, any> = {},
-        include: string | Record<string, any> = "",
-        limit: number = 25,
-        offset: number = 0,
-        sortBy: string = this.defaultSortField,
-        sortOrder: string = "asc",
-        fields: string | null = null
-    ): Promise<GetManyResult> {
-        return await this._getMany(q, include, Number(limit), Number(offset), sortBy, sortOrder, {}, fields);
     }
 
     /**
