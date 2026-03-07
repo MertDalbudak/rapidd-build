@@ -170,7 +170,6 @@ export function generateRouteFile(modelName: string, modelInfo: ModelInfo, impor
   const numeric = isNumericId(modelInfo);
   const idType = numeric ? 'number' : 'string';
   const idCast = numeric ? 'Number(rawId)' : 'rawId';
-
   return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { ${className}, QueryBuilder } from '${importPathPrefix}/${className}';
 
@@ -184,9 +183,14 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
 
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
-            const { q = {}, include = '', limit = '25', offset = '0', sortBy = 'id', sortOrder = 'asc', fields = null } = request.query as Record<string, string>;
+            const query = request.query as Record<string, string>;
+            const { q = {}, include = '', sortBy = 'id', sortOrder = 'asc', fields = null } = query;
             const model = (request as any).${className} as ${className};
-            const results = await model.getMany(q, include, Number(limit), Number(offset), sortBy, sortOrder as 'asc' | 'desc', fields);
+            const totalResults = query.totalResults === 'true';
+            const pagination = process.env.PAGINATION_MODE === 'page'
+                ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
+                : undefined;
+            const results = await model.getMany(q, include, Number(query.limit || '25'), Number(query.offset || '0'), sortBy, sortOrder as 'asc' | 'desc', fields, pagination, totalResults);
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
             const response = QueryBuilder.errorHandler(error);
@@ -286,9 +290,14 @@ ${subRouteRegistrations}
 
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
-            const { q = {}, include = '', limit = '25', offset = '0', sortBy = 'id', sortOrder = 'asc', fields = null } = request.query as Record<string, string>;
+            const query = request.query as Record<string, string>;
+            const { q = {}, include = '', sortBy = 'id', sortOrder = 'asc', fields = null } = query;
             const model = (request as any).${className} as ${className};
-            const results = await model.getMany(q, include, Number(limit), Number(offset), sortBy, sortOrder as 'asc' | 'desc', fields);
+            const totalResults = query.totalResults === 'true';
+            const pagination = process.env.PAGINATION_MODE === 'page'
+                ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
+                : undefined;
+            const results = await model.getMany(q, include, Number(query.limit || '25'), Number(query.offset || '0'), sortBy, sortOrder as 'asc' | 'desc', fields, pagination, totalResults);
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
             const response = QueryBuilder.errorHandler(error);
@@ -398,10 +407,15 @@ const ${junctionModelName}Routes: FastifyPluginAsync = async (fastify) => {
         try {
             const { id: rawParentId } = request.params as { id: string };
             const parentId: ${parentIdType} = ${parentIdCast};
-            const { q = {}, include = '', limit = '25', offset = '0', sortBy = 'id', sortOrder = 'asc', fields = null } = request.query as Record<string, string>;
+            const query = request.query as Record<string, string>;
+            const { q = {}, include = '', sortBy = 'id', sortOrder = 'asc', fields = null } = query;
             const filter = typeof q === 'object' ? { ...q, ${fkFieldToParent}: parentId } : { ${fkFieldToParent}: parentId };
             const model = (request as any).${className} as ${className};
-            const results = await model.getMany(filter, include, Number(limit), Number(offset), sortBy, sortOrder as 'asc' | 'desc', fields);
+            const totalResults = query.totalResults === 'true';
+            const pagination = process.env.PAGINATION_MODE === 'page'
+                ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
+                : undefined;
+            const results = await model.getMany(filter, include, Number(query.limit || '25'), Number(query.offset || '0'), sortBy, sortOrder as 'asc' | 'desc', fields, pagination, totalResults);
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
             const response = QueryBuilder.errorHandler(error);
