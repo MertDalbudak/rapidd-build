@@ -73,14 +73,6 @@ export class ${className} extends Model {
         return await this._delete(id);
     }
 
-    filter(include: string | Record<string, unknown>): Record<string, unknown> {
-        return { ...this._filter(include), ...this.getAccessFilter() };
-    }
-
-    include(include: string | Record<string, unknown>): Record<string, unknown> {
-        return this._include(include);
-    }
-
     static override QueryBuilder = new QueryBuilder('${modelName}');
 }
 
