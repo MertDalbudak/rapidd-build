@@ -165,36 +165,28 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
 /**
  * Generate Fastify route for a standalone model (TypeScript)
  */
-export function generateRouteFile(modelName: string, modelInfo: ModelInfo, importPathPrefix = '../../../src/models'): string {
+export function generateRouteFile(modelName: string, modelInfo: ModelInfo, importPathPrefix = '../../../src'): string {
   const className = toClassName(modelName);
   const numeric = isNumericId(modelInfo);
   const idType = numeric ? 'number' : 'string';
   const idCast = numeric ? 'Number(rawId)' : 'rawId';
   return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { ${className}, QueryBuilder } from '${importPathPrefix}/${className}';
+import { ${className} } from '${importPathPrefix}/models/${className}';
 
 const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
     fastify.addHook('preHandler', async (request, reply) => {
         if (!request.user) {
             return reply.sendError(401, 'no_valid_session');
         }
-        (request as any).${className} = new ${className}({ user: request.user });
+        request.model = new ${className}({ user: request.user });
     });
 
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
-            const query = request.query as Record<string, string>;
-            const { q = {}, include = '', sortBy = 'id', sortOrder = 'asc', fields = null } = query;
-            const model = (request as any).${className} as ${className};
-            const totalResults = query.totalResults === 'true';
-            const pagination = process.env.PAGINATION_MODE === 'page'
-                ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
-                : undefined;
-            const results = await model.getMany({ q, include, limit: Number(query.limit || '25'), offset: Number(query.offset || '0'), sortBy, sortOrder, fields, pagination, totalResults });
+            const results = await request.model!.getMany(request.parseListQuery());
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 
@@ -203,24 +195,18 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
             const { id: rawId } = request.params as { id: string };
             const id: ${idType} = ${idCast};
             const { include = '', fields = null } = request.query as Record<string, string>;
-            const model = (request as any).${className} as ${className};
-            const response = await model.get(id, include, {}, fields);
-            return reply.send(response);
+            return reply.send(await request.model!.get(id, include, {}, fields));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 
     fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const payload = request.body as Record<string, unknown>;
         try {
-            const model = (request as any).${className} as ${className};
-            const response = await model.create(payload);
-            return reply.code(201).send(response);
+            return reply.code(201).send(await request.model!.create(payload));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error, payload);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error, payload);
         }
     });
 
@@ -229,12 +215,9 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
         const id: ${idType} = ${idCast};
         const payload = request.body as Record<string, unknown>;
         try {
-            const model = (request as any).${className} as ${className};
-            const response = await model.update(id, payload);
-            return reply.send(response);
+            return reply.send(await request.model!.update(id, payload));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error, payload);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error, payload);
         }
     });
 
@@ -242,12 +225,10 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
         try {
             const { id: rawId } = request.params as { id: string };
             const id: ${idType} = ${idCast};
-            const model = (request as any).${className} as ${className};
-            await model.delete(id);
+            await request.model!.delete(id);
             return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 };
@@ -264,7 +245,7 @@ export function generateParentRouteFile(modelName: string, modelInfo: ModelInfo,
   const numeric = isNumericId(modelInfo);
   const idType = numeric ? 'number' : 'string';
   const idCast = numeric ? 'Number(rawId)' : 'rawId';
-  const importPath = '../../../../src/models';
+  const importPath = '../../../../src';
 
   const subRouteImports = subRoutes.map(sr =>
     `import ${sr.subRouteName}Routes from './_${sr.subRouteName}';`
@@ -275,7 +256,7 @@ export function generateParentRouteFile(modelName: string, modelInfo: ModelInfo,
   ).join('\n');
 
   return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { ${className}, QueryBuilder } from '${importPath}/${className}';
+import { ${className} } from '${importPath}/models/${className}';
 ${subRouteImports}
 
 const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
@@ -283,25 +264,17 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
         if (!request.user) {
             return reply.sendError(401, 'no_valid_session');
         }
-        (request as any).${className} = new ${className}({ user: request.user });
+        request.model = new ${className}({ user: request.user });
     });
 
 ${subRouteRegistrations}
 
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
-            const query = request.query as Record<string, string>;
-            const { q = {}, include = '', sortBy = 'id', sortOrder = 'asc', fields = null } = query;
-            const model = (request as any).${className} as ${className};
-            const totalResults = query.totalResults === 'true';
-            const pagination = process.env.PAGINATION_MODE === 'page'
-                ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
-                : undefined;
-            const results = await model.getMany({ q, include, limit: Number(query.limit || '25'), offset: Number(query.offset || '0'), sortBy, sortOrder, fields, pagination, totalResults });
+            const results = await request.model!.getMany(request.parseListQuery());
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 
@@ -310,24 +283,18 @@ ${subRouteRegistrations}
             const { id: rawId } = request.params as { id: string };
             const id: ${idType} = ${idCast};
             const { include = '', fields = null } = request.query as Record<string, string>;
-            const model = (request as any).${className} as ${className};
-            const response = await model.get(id, include, {}, fields);
-            return reply.send(response);
+            return reply.send(await request.model!.get(id, include, {}, fields));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 
     fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const payload = request.body as Record<string, unknown>;
         try {
-            const model = (request as any).${className} as ${className};
-            const response = await model.create(payload);
-            return reply.code(201).send(response);
+            return reply.code(201).send(await request.model!.create(payload));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error, payload);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error, payload);
         }
     });
 
@@ -336,12 +303,9 @@ ${subRouteRegistrations}
         const id: ${idType} = ${idCast};
         const payload = request.body as Record<string, unknown>;
         try {
-            const model = (request as any).${className} as ${className};
-            const response = await model.update(id, payload);
-            return reply.send(response);
+            return reply.send(await request.model!.update(id, payload));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error, payload);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error, payload);
         }
     });
 
@@ -349,12 +313,10 @@ ${subRouteRegistrations}
         try {
             const { id: rawId } = request.params as { id: string };
             const id: ${idType} = ${idCast};
-            const model = (request as any).${className} as ${className};
-            await model.delete(id);
+            await request.model!.delete(id);
             return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 };
@@ -390,97 +352,72 @@ export function generateSubRouteFile(
   const otherFkType = numericOtherFk ? 'number' : 'string';
   const parentIdCast = numericParentId ? 'Number(rawParentId)' : 'rawParentId';
   const otherFkCast = numericOtherFk ? 'Number(rawSubId)' : 'rawSubId';
-  const importPath = '../../../../src/models';
+  const importPath = '../../../../src';
 
   return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { ${className}, QueryBuilder } from '${importPath}/${className}';
+import { ${className} } from '${importPath}/models/${className}';
 
 const ${junctionModelName}Routes: FastifyPluginAsync = async (fastify) => {
     fastify.addHook('preHandler', async (request, reply) => {
         if (!request.user) {
             return reply.sendError(401, 'no_valid_session');
         }
-        (request as any).${className} = new ${className}({ user: request.user });
+        request.model = new ${className}({ user: request.user });
     });
 
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const { id: rawParentId } = request.params as { id: string };
             const parentId: ${parentIdType} = ${parentIdCast};
-            const query = request.query as Record<string, string>;
-            const { q = {}, include = '', sortBy = 'id', sortOrder = 'asc', fields = null } = query;
-            const filter = typeof q === 'object' ? { ...q, ${fkFieldToParent}: parentId } : { ${fkFieldToParent}: parentId };
-            const model = (request as any).${className} as ${className};
-            const totalResults = query.totalResults === 'true';
-            const pagination = process.env.PAGINATION_MODE === 'page'
-                ? { page: Number(query.page || '1'), pageSize: Number(query.pageSize || '25') }
-                : undefined;
-            const results = await model.getMany({ q: filter, include, limit: Number(query.limit || '25'), offset: Number(query.offset || '0'), sortBy, sortOrder, fields, pagination, totalResults });
+            const params = request.parseListQuery();
+            const q = typeof params.q === 'object' ? { ...params.q, ${fkFieldToParent}: parentId } : { ${fkFieldToParent}: parentId };
+            const results = await request.model!.getMany({ ...params, q });
             return reply.sendList(results.data, results.meta);
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 
     fastify.get('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const { id: rawParentId, subId: rawSubId } = request.params as { id: string; subId: string };
-            const parentId: ${parentIdType} = ${parentIdCast};
-            const ${otherFkField}: ${otherFkType} = ${otherFkCast};
-            const compositeId = { ${fkFieldToParent}: parentId, ${otherFkField} };
+            const compositeId = { ${fkFieldToParent}: ${parentIdCast} as ${parentIdType}, ${otherFkField}: ${otherFkCast} as ${otherFkType} };
             const { include = '', fields = null } = request.query as Record<string, string>;
-            const model = (request as any).${className} as ${className};
-            const response = await model.get(compositeId, include, {}, fields);
-            return reply.send(response);
+            return reply.send(await request.model!.get(compositeId, include, {}, fields));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 
     fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const { id: rawParentId } = request.params as { id: string };
-        const parentId: ${parentIdType} = ${parentIdCast};
-        const payload = { ...(request.body as Record<string, unknown>), ${fkFieldToParent}: parentId };
+        const payload = { ...(request.body as Record<string, unknown>), ${fkFieldToParent}: ${parentIdCast} as ${parentIdType} };
         try {
-            const model = (request as any).${className} as ${className};
-            const response = await model.create(payload);
-            return reply.code(201).send(response);
+            return reply.code(201).send(await request.model!.create(payload));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error, payload);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error, payload);
         }
     });
 
     fastify.patch('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
         const { id: rawParentId, subId: rawSubId } = request.params as { id: string; subId: string };
-        const parentId: ${parentIdType} = ${parentIdCast};
-        const ${otherFkField}: ${otherFkType} = ${otherFkCast};
-        const compositeId = { ${fkFieldToParent}: parentId, ${otherFkField} };
+        const compositeId = { ${fkFieldToParent}: ${parentIdCast} as ${parentIdType}, ${otherFkField}: ${otherFkCast} as ${otherFkType} };
         const payload = request.body as Record<string, unknown>;
         try {
-            const model = (request as any).${className} as ${className};
-            const response = await model.update(compositeId, payload);
-            return reply.send(response);
+            return reply.send(await request.model!.update(compositeId, payload));
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error, payload);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error, payload);
         }
     });
 
     fastify.delete('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
         try {
             const { id: rawParentId, subId: rawSubId } = request.params as { id: string; subId: string };
-            const parentId: ${parentIdType} = ${parentIdCast};
-            const ${otherFkField}: ${otherFkType} = ${otherFkCast};
-            const compositeId = { ${fkFieldToParent}: parentId, ${otherFkField} };
-            const model = (request as any).${className} as ${className};
-            await model.delete(compositeId);
+            const compositeId = { ${fkFieldToParent}: ${parentIdCast} as ${parentIdType}, ${otherFkField}: ${otherFkCast} as ${otherFkType} };
+            await request.model!.delete(compositeId);
             return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
         } catch (error: any) {
-            const response = QueryBuilder.errorHandler(error);
-            return reply.code(response.status_code).send(response);
+            return reply.handleError(error);
         }
     });
 };
