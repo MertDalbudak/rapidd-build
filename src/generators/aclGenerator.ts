@@ -22,6 +22,12 @@ function generateModelACL(modelName: string): string {
             getOmitFields(_user: RapiddUser): string[] {
                 return [];
             },
+            // Whitelist of writable fields for create/update payloads (null = unrestricted).
+            // At the REST edge (strictWrites) non-writable fields are rejected with 403;
+            // internal model calls silently strip them instead.
+            getWritableFields(_user: RapiddUser): string[] | null {
+                return null;
+            },
         }`;
 }
 

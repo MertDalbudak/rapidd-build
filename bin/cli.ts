@@ -2,13 +2,22 @@
 
 import { Command } from 'commander';
 import { buildModels, BuildOptions } from '../src/commands/build';
+// Resolve package.json from dist/bin (published) or bin (dev via tsx)
+let version = '0.0.0';
+try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    version = require('../../package.json').version;
+} catch {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    version = require('../package.json').version;
+}
 
 const program = new Command();
 
 program
   .name('rapidd')
   .description('Rapidd build tool for generating TypeScript model files from Prisma schema')
-  .version('2.0.0');
+  .version(version);
 
 program
   .command('build')

@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "2.1.9",
+  "version": "2.2.0",
   "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -46,7 +46,7 @@
   "author": "Mert Dalbudak",
   "license": "MIT",
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=22.0.0"
   },
   "files": [
     "dist/",
@@ -54,16 +54,16 @@
     "LICENSE"
   ],
   "dependencies": {
-    "@prisma/internals": "^7.0.1",
+    "@prisma/internals": "^7.8.0",
     "commander": "^11.0.0"
   },
   "devDependencies": {
-    "@types/node": "^20.0.0",
-    "prisma": "^7.0.1",
+    "@types/node": "^22.12.0",
+    "prisma": "^7.8.0",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0"
   },
   "peerDependencies": {
-    "@prisma/client": "^7.0.1"
+    "@prisma/client": "^7.8.0"
   }
 }
