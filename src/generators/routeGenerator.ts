@@ -329,7 +329,11 @@ const ${junctionModelName}Routes: FastifyPluginAsync = async (fastify) => {
         const { id: rawParentId } = request.params as { id: string };
         const parentId: ${parentIdType} = ${parentIdCast};
         const params = request.parseListQuery();
-        const q = typeof params.q === 'object' ? { ...params.q, ${fkFieldToParent}: parentId } : { ${fkFieldToParent}: parentId };
+        // Scope the list to the parent: merge the parent FK into the client filter
+        // (string filters are appended, not discarded)
+        const q = typeof params.q === 'string' && params.q.trim() !== ''
+            ? \`\${params.q},${fkFieldToParent}=\${parentId}\`
+            : { ...(typeof params.q === 'object' ? params.q : {}), ${fkFieldToParent}: parentId };
         const results = await request.model!.getMany({ ...params, q });
         return reply.sendList(results.data, results.meta);
     });
