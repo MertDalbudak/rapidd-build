@@ -140,10 +140,16 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
       if (!parentSubRoutes.has(parentRel.parentModel)) {
         parentSubRoutes.set(parentRel.parentModel, []);
       }
-      parentSubRoutes.get(parentRel.parentModel)!.push({
+      const list = parentSubRoutes.get(parentRel.parentModel)!;
+      const subRouteName = computeSubRouteName(parentRel.parentModel, modelName);
+      // Self-referential n:m (both FKs point to the same parent) yields two identical entries —
+      // emit ONE sub-route (scoped by the first FK), else the generated parent index has a
+      // duplicate import/register (TS2300) and a duplicate Fastify route registration.
+      if (list.some((sr) => sr.subRouteName === subRouteName)) continue;
+      list.push({
         junctionModelName: modelName,
         junctionModelInfo: modelInfo,
-        subRouteName: computeSubRouteName(parentRel.parentModel, modelName),
+        subRouteName,
         fkFieldToParent: parentRel.fkField,
         otherFkField: otherRels[0].fkField,
       });

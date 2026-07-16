@@ -1,6 +1,6 @@
 {
   "name": "@rapidd/build",
-  "version": "2.2.1",
+  "version": "2.3.0",
   "description": "Dynamic code generator that transforms Prisma schemas into Fastify CRUD APIs with TypeScript",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -55,12 +55,12 @@
   ],
   "dependencies": {
     "@prisma/internals": "^7.8.0",
-    "commander": "^11.0.0"
+    "commander": "^15.0.0"
   },
   "devDependencies": {
-    "@types/node": "^22.12.0",
+    "@types/node": "^24.13.3",
     "prisma": "^7.8.0",
-    "tsx": "^4.0.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.5.0"
   },
   "peerDependencies": {

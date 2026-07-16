@@ -5,6 +5,7 @@ import { parsePrismaSchema, parsePrismaDMMF } from '../parsers/prismaParser';
 import { generateAllModels } from '../generators/modelGenerator';
 import { generateAllRoutes } from '../generators/routeGenerator';
 import { generateACL } from '../generators/aclGenerator';
+import { generateUserConfig } from '../generators/userConfigGenerator';
 import type { ModelInfo } from '../parsers/types';
 
 export interface BuildOptions {
@@ -29,6 +30,7 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
   const modelDir = path.join(srcDir, 'models');
   const configDir = path.join(srcDir, 'config');
   const aclPath = path.join(configDir, 'acl.ts');
+  const userConfigPath = path.join(configDir, 'user.ts');
   const routesDir = path.join(baseDir, 'routes', 'api', 'v1');
 
   console.log('Building Rapidd models...');
@@ -119,6 +121,7 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
   // Generate ACL configuration
   if (shouldGenerate.acl) {
     generateACL(filteredModels, aclPath);
+    generateUserConfig(userConfigPath);
   }
 
   // Generate routes
