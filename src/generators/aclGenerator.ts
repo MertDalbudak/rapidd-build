@@ -55,12 +55,17 @@ const acl: AclConfig = {
 export default acl;
 `;
 
-  // Skip if file already exists and has non-empty model config
+  // An existing acl.ts is the app's security config: it is only ever replaced while its
+  // model block is still empty. (Matching "custom content" instead could miss a valid file
+  // — a trailing comment was enough — and overwrite it with the allow-all scaffold.)
   if (fs.existsSync(outputPath)) {
     const existing = fs.readFileSync(outputPath, 'utf-8');
-    const modelBlockMatch = existing.match(/model:\s*\{([\s\S]*?)\}\s*,?\s*\}\s*;/);
-    if (modelBlockMatch && modelBlockMatch[1].trim().length > 0) {
-      console.log('Skipped acl.ts (exists with custom config)');
+    if (!/model\s*:\s*\{\s*\}/.test(existing)) {
+      const missing = modelNames.filter((name) => !new RegExp(`\\b${name}\\s*:`).test(existing));
+      console.log('Skipped acl.ts (exists)');
+      if (missing.length > 0) {
+        console.log(`  No ACL entry for: ${missing.join(', ')} — these fall back to ACL_DEFAULT`);
+      }
       return;
     }
   }

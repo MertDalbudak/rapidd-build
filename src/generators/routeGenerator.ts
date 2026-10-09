@@ -13,20 +13,6 @@ function toClassName(modelName: string): string {
     .join('');
 }
 
-const numericTypes = ['Int', 'Float', 'Decimal', 'BigInt'];
-
-/**
- * Detect if the primary key field is numeric
- */
-function isNumericId(modelInfo: ModelInfo): boolean {
-  for (const field of Object.values(modelInfo.fields)) {
-    if (field.isId && numericTypes.includes(field.type)) {
-      return true;
-    }
-  }
-  return false;
-}
-
 // ─── Junction table detection ────────────────────────────────────────
 
 interface ParentRelation {
@@ -169,32 +155,20 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
 // ─── Route file generators ──────────────────────────────────────────
 
 /**
- * Generate Fastify route for a standalone model (TypeScript)
+ * The CRUD handlers shared by standalone and parent routes.
+ * Ids are passed on as they arrive: the model parses them by the key's type, so a
+ * non-numeric id for an Int key is a 400 invalid_id (Number() made it NaN, and lost
+ * precision past 2^53 for BigInt keys).
  */
-export function generateRouteFile(modelName: string, modelInfo: ModelInfo, importPathPrefix = '../../../src'): string {
-  const className = toClassName(modelName);
-  const numeric = isNumericId(modelInfo);
-  const idType = numeric ? 'number' : 'string';
-  const idCast = numeric ? 'Number(rawId)' : 'rawId';
-  return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
-import { ${className} } from '${importPathPrefix}/models/${className}';
-
-const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
-    fastify.addHook('preHandler', async (request, reply) => {
-        if (!request.user) {
-            return reply.sendError(401, 'no_valid_session');
-        }
-        request.model = new ${className}({ user: request.user, strictWrites: true });
-    });
-
-    fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
+function crudHandlers(className: string): string {
+  return `    fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const results = await request.model!.getMany(request.parseListQuery());
         return reply.sendList(results.data, results.meta);
     });
 
+    // Ids go to the model as strings — it parses them by the key's type (composite keys: "a~b")
     fastify.get('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawId } = request.params as { id: string };
-        const id: ${idType} = ${idCast};
+        const { id } = request.params as { id: string };
         const { include = '', fields = null } = request.query as Record<string, string>;
         return reply.send(await request.model!.get(id, include, {}, fields));
     });
@@ -205,18 +179,39 @@ const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
     });
 
     fastify.patch('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawId } = request.params as { id: string };
-        const id: ${idType} = ${idCast};
+        const { id } = request.params as { id: string };
         const payload = request.body as Record<string, unknown>;
         return reply.send(await request.model!.update(id, payload));
     });
 
     fastify.delete('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawId } = request.params as { id: string };
-        const id: ${idType} = ${idCast};
+        const { id } = request.params as { id: string };
         await request.model!.delete(id);
         return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
-    });
+    });`;
+}
+
+function sessionHook(className: string): string {
+  return `    fastify.addHook('preHandler', async (request, reply) => {
+        if (!request.user) {
+            return reply.sendError(401, 'no_valid_session');
+        }
+        request.model = new ${className}({ user: request.user, strictWrites: true });
+    });`;
+}
+
+/**
+ * Generate Fastify route for a standalone model (TypeScript)
+ */
+export function generateRouteFile(modelName: string, _modelInfo: ModelInfo, importPathPrefix = '../../../src'): string {
+  const className = toClassName(modelName);
+  return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+import { ${className} } from '${importPathPrefix}/models/${className}';
+
+const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
+${sessionHook(className)}
+
+${crudHandlers(className)}
 };
 
 export default ${modelName}Routes;
@@ -226,11 +221,8 @@ export default ${modelName}Routes;
 /**
  * Generate Fastify route for a parent model that has sub-routes (TypeScript)
  */
-export function generateParentRouteFile(modelName: string, modelInfo: ModelInfo, subRoutes: SubRouteInfo[]): string {
+export function generateParentRouteFile(modelName: string, _modelInfo: ModelInfo, subRoutes: SubRouteInfo[]): string {
   const className = toClassName(modelName);
-  const numeric = isNumericId(modelInfo);
-  const idType = numeric ? 'number' : 'string';
-  const idCast = numeric ? 'Number(rawId)' : 'rawId';
   const importPath = '../../../../src';
 
   const subRouteImports = subRoutes.map(sr =>
@@ -246,45 +238,11 @@ import { ${className} } from '${importPath}/models/${className}';
 ${subRouteImports}
 
 const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
-    fastify.addHook('preHandler', async (request, reply) => {
-        if (!request.user) {
-            return reply.sendError(401, 'no_valid_session');
-        }
-        request.model = new ${className}({ user: request.user, strictWrites: true });
-    });
+${sessionHook(className)}
 
 ${subRouteRegistrations}
 
-    fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
-        const results = await request.model!.getMany(request.parseListQuery());
-        return reply.sendList(results.data, results.meta);
-    });
-
-    fastify.get('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawId } = request.params as { id: string };
-        const id: ${idType} = ${idCast};
-        const { include = '', fields = null } = request.query as Record<string, string>;
-        return reply.send(await request.model!.get(id, include, {}, fields));
-    });
-
-    fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
-        const payload = request.body as Record<string, unknown>;
-        return reply.code(201).send(await request.model!.create(payload));
-    });
-
-    fastify.patch('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawId } = request.params as { id: string };
-        const id: ${idType} = ${idCast};
-        const payload = request.body as Record<string, unknown>;
-        return reply.send(await request.model!.update(id, payload));
-    });
-
-    fastify.delete('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawId } = request.params as { id: string };
-        const id: ${idType} = ${idCast};
-        await request.model!.delete(id);
-        return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
-    });
+${crudHandlers(className)}
 };
 
 export default ${modelName}Routes;
@@ -292,82 +250,57 @@ export default ${modelName}Routes;
 }
 
 /**
- * Check if a specific field in a model is numeric
- */
-function isFieldNumeric(modelInfo: ModelInfo, fieldName: string): boolean {
-  const field = modelInfo.fields[fieldName];
-  return !!field && numericTypes.includes(field.type);
-}
-
-/**
  * Generate Fastify sub-route for a junction table (TypeScript).
- * Uses composite key { fkFieldToParent: parentId, otherFkField: subId }
- * for get, update, and delete operations.
+ * Every handler is scoped to the parent id in the URL: the list through getMany's
+ * server-side `where` (a client ?q= can only narrow it), single records through the
+ * composite key { fkFieldToParent, otherFkField }.
  */
 export function generateSubRouteFile(
   junctionModelName: string,
-  junctionModelInfo: ModelInfo,
-  parentModelInfo: ModelInfo,
+  _junctionModelInfo: ModelInfo,
+  _parentModelInfo: ModelInfo,
   fkFieldToParent: string,
   otherFkField: string,
 ): string {
   const className = toClassName(junctionModelName);
-  const numericParentId = isNumericId(parentModelInfo);
-  const numericOtherFk = isFieldNumeric(junctionModelInfo, otherFkField);
-  const parentIdType = numericParentId ? 'number' : 'string';
-  const otherFkType = numericOtherFk ? 'number' : 'string';
-  const parentIdCast = numericParentId ? 'Number(rawParentId)' : 'rawParentId';
-  const otherFkCast = numericOtherFk ? 'Number(rawSubId)' : 'rawSubId';
   const importPath = '../../../../src';
 
   return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { ${className} } from '${importPath}/models/${className}';
 
 const ${junctionModelName}Routes: FastifyPluginAsync = async (fastify) => {
-    fastify.addHook('preHandler', async (request, reply) => {
-        if (!request.user) {
-            return reply.sendError(401, 'no_valid_session');
-        }
-        request.model = new ${className}({ user: request.user, strictWrites: true });
+${sessionHook(className)}
+
+    // The parent from the URL, parsed by the key's type (400 invalid_id when it doesn't fit)
+    const parentKey = (request: FastifyRequest) => ({
+        ${fkFieldToParent}: request.model!.parseKey('${fkFieldToParent}', (request.params as { id: string }).id),
     });
 
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawParentId } = request.params as { id: string };
-        const parentId: ${parentIdType} = ${parentIdCast};
-        const params = request.parseListQuery();
-        // Scope the list to the parent: merge the parent FK into the client filter
-        // (string filters are appended, not discarded)
-        const q = typeof params.q === 'string' && params.q.trim() !== ''
-            ? \`\${params.q},${fkFieldToParent}=\${parentId}\`
-            : { ...(typeof params.q === 'object' ? params.q : {}), ${fkFieldToParent}: parentId };
-        const results = await request.model!.getMany({ ...params, q });
+        const results = await request.model!.getMany({ ...request.parseListQuery(), where: parentKey(request) });
         return reply.sendList(results.data, results.meta);
     });
 
     fastify.get('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawParentId, subId: rawSubId } = request.params as { id: string; subId: string };
-        const compositeId = { ${fkFieldToParent}: ${parentIdCast} as ${parentIdType}, ${otherFkField}: ${otherFkCast} as ${otherFkType} };
+        const { subId } = request.params as { subId: string };
         const { include = '', fields = null } = request.query as Record<string, string>;
-        return reply.send(await request.model!.get(compositeId, include, {}, fields));
+        return reply.send(await request.model!.get({ ...parentKey(request), ${otherFkField}: subId }, include, {}, fields));
     });
 
     fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawParentId } = request.params as { id: string };
-        const payload = { ...(request.body as Record<string, unknown>), ${fkFieldToParent}: ${parentIdCast} as ${parentIdType} };
+        const payload = { ...(request.body as Record<string, unknown>), ...parentKey(request) };
         return reply.code(201).send(await request.model!.create(payload));
     });
 
     fastify.patch('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawParentId, subId: rawSubId } = request.params as { id: string; subId: string };
-        const compositeId = { ${fkFieldToParent}: ${parentIdCast} as ${parentIdType}, ${otherFkField}: ${otherFkCast} as ${otherFkType} };
+        const { subId } = request.params as { subId: string };
         const payload = request.body as Record<string, unknown>;
-        return reply.send(await request.model!.update(compositeId, payload));
+        return reply.send(await request.model!.update({ ...parentKey(request), ${otherFkField}: subId }, payload));
     });
 
     fastify.delete('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
-        const { id: rawParentId, subId: rawSubId } = request.params as { id: string; subId: string };
-        const compositeId = { ${fkFieldToParent}: ${parentIdCast} as ${parentIdType}, ${otherFkField}: ${otherFkCast} as ${otherFkType} };
-        await request.model!.delete(compositeId);
+        const { subId } = request.params as { subId: string };
+        await request.model!.delete({ ...parentKey(request), ${otherFkField}: subId });
         return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
     });
 };

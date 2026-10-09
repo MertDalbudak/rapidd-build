@@ -34,164 +34,122 @@ function extractBlocks(content: string, keyword: string): Array<{ name: string; 
   return blocks;
 }
 
+const SCALAR_TYPES = new Set(['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Decimal', 'Json', 'Bytes', 'BigInt']);
+
+/** Remove // comments, leaving string literals (e.g. @default("https://...")) intact */
+function stripComments(content: string): string {
+  return content.split('\n').map((line) => {
+    let inString = false;
+    for (let i = 0; i < line.length; i++) {
+      if (line[i] === '"' && line[i - 1] !== '\\') inString = !inString;
+      else if (!inString && line[i] === '/' && line[i + 1] === '/') return line.slice(0, i);
+    }
+    return line;
+  }).join('\n');
+}
+
+/** Field names from a block attribute's list: @@id([a, b(sort: Desc)], name: "x") → [a, b] */
+function parseFieldList(line: string, attribute: string): string[] | null {
+  const match = line.match(new RegExp(`^${attribute}\\(\\s*(?:fields:\\s*)?\\[([^\\]]+)\\]`));
+  return match ? match[1].split(',').map((f) => f.replace(/\(.*$/, '').trim()).filter(Boolean) : null;
+}
+
+/** The arguments of a field's @relation(...) */
+function parseRelationAttribute(attributes: string): Pick<ModelRelation, 'relationName' | 'relationFromFields' | 'relationToFields'> {
+  const start = attributes.indexOf('@relation(');
+  if (start === -1) return { relationFromFields: [], relationToFields: [] };
+  let depth = 0;
+  let end = start + '@relation'.length;
+  for (; end < attributes.length; end++) {
+    if (attributes[end] === '(') depth++;
+    else if (attributes[end] === ')' && --depth === 0) break;
+  }
+  const args = attributes.slice(start + '@relation('.length, end);
+  const list = (key: string) => {
+    const m = args.match(new RegExp(`${key}:\\s*\\[([^\\]]*)\\]`));
+    return m ? m[1].split(',').map((f) => f.trim()).filter(Boolean) : [];
+  };
+  const name = args.match(/^\s*"([^"]+)"/) ?? args.match(/name:\s*"([^"]+)"/);
+  return { relationName: name?.[1], relationFromFields: list('fields'), relationToFields: list('references') };
+}
+
 /**
- * Parse Prisma schema file and extract model information
+ * Parse a Prisma schema file without @prisma/internals (fallback).
+ * A field is a relation only when its type is a model of the schema — enums and scalars
+ * like BigInt are not.
  */
 export function parsePrismaSchema(schemaPath: string): ParsedSchema {
-  const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+  const schemaContent = stripComments(fs.readFileSync(schemaPath, 'utf-8'));
+
+  const enums: Record<string, string[]> = {};
+  for (const { name, body } of extractBlocks(schemaContent, 'enum')) {
+    enums[name] = parseEnumValues(body);
+  }
+
+  const modelBlocks = extractBlocks(schemaContent, 'model');
+  const modelNames = new Set(modelBlocks.map((block) => block.name));
   const models: Record<string, ModelInfo> = {};
 
-  // Extract models with proper brace matching
-  const modelBlocks = extractBlocks(schemaContent, 'model');
   for (const { name, body } of modelBlocks) {
-    const fields = parseModelFields(body);
-    const compositeKeyFields = parseCompositeKey(body);
-    const dbName = parseMapDirective(body);
+    const fields: Record<string, ModelField> = {};
+    const relations: ModelRelation[] = [];
+    let compositeKey: string[] | null = null;
+    const uniqueFields: string[][] = [];
+    let dbName: string | null = null;
 
-    // Mark composite key fields with isId
-    if (compositeKeyFields) {
-      for (const fieldName of compositeKeyFields) {
-        if (fields[fieldName]) {
-          fields[fieldName].isId = true;
-        }
+    for (const line of body.split('\n').map((l) => l.trim()).filter(Boolean)) {
+      if (line.startsWith('@@')) {
+        compositeKey = parseFieldList(line, '@@id') ?? compositeKey;
+        const unique = parseFieldList(line, '@@unique');
+        if (unique) uniqueFields.push(unique);
+        dbName = line.match(/^@@map\(\s*(?:name:\s*)?["']([^"']+)["']/)?.[1] ?? dbName;
+        continue;
+      }
+
+      const fieldMatch = line.match(/^(\w+)\s+(Unsupported\([^)]*\)|\w+)(\[\]|\?)?\s*(.*)$/);
+      if (!fieldMatch) continue;
+      const [, fieldName, fieldType, modifier, attributes = ''] = fieldMatch;
+      const isRelation = modelNames.has(fieldType);
+      const kind = isRelation ? 'object' : enums[fieldType] ? 'enum' : SCALAR_TYPES.has(fieldType) ? 'scalar' : 'unsupported';
+
+      fields[fieldName] = {
+        type: fieldType,
+        optional: modifier === '?',
+        isArray: modifier === '[]',
+        isRelation,
+        isId: /@id\b/.test(attributes),
+        isUnique: /@unique\b/.test(attributes),
+        isUpdatedAt: /@updatedAt\b/.test(attributes),
+        hasDefaultValue: /@default\(/.test(attributes),
+        attributes,
+        kind,
+      };
+
+      if (isRelation) {
+        const relation = parseRelationAttribute(attributes);
+        Object.assign(fields[fieldName], relation);
+        relations.push({
+          name: fieldName,
+          type: fieldType,
+          isArray: modifier === '[]',
+          optional: modifier === '?',
+          kind,
+          ...relation,
+        });
       }
     }
 
     models[name] = {
       name,
       fields,
-      relations: parseModelRelations(body),
-      compositeKey: compositeKeyFields,
-      uniqueFields: parseUniqueFields(body),
-      dbName: dbName || name.toLowerCase() // Default to lowercase model name
+      relations,
+      compositeKey: compositeKey && compositeKey.length > 1 ? compositeKey : null,
+      uniqueFields,
+      dbName: dbName || name.toLowerCase(),
     };
   }
 
-  // Extract enums
-  const enums: Record<string, string[]> = {};
-  const enumBlocks = extractBlocks(schemaContent, 'enum');
-  for (const { name, body } of enumBlocks) {
-    enums[name] = parseEnumValues(body);
-  }
-
   return { models, enums };
-}
-
-/**
- * Parse composite key from @@id directive
- */
-function parseCompositeKey(modelBody: string): string[] | null {
-  const lines = modelBody.split('\n').map(line => line.trim());
-
-  for (const line of lines) {
-    // Match @@id([field1, field2, ...])
-    const match = line.match(/^@@id\(\[([^\]]+)\]\)/);
-    if (match) {
-      const fieldsStr = match[1];
-      return fieldsStr.split(',').map(f => f.trim());
-    }
-  }
-
-  return null;
-}
-
-/**
- * Parse @@unique directives to get compound unique constraints
- */
-function parseUniqueFields(modelBody: string): string[][] {
-  const result: string[][] = [];
-  const lines = modelBody.split('\n').map(line => line.trim());
-
-  for (const line of lines) {
-    const match = line.match(/^@@unique\(\[([^\]]+)\]\)/);
-    if (match) {
-      result.push(match[1].split(',').map(f => f.trim()));
-    }
-  }
-
-  return result;
-}
-
-/**
- * Parse @@map directive to get database table name
- */
-function parseMapDirective(modelBody: string): string | null {
-  const lines = modelBody.split('\n').map(line => line.trim());
-
-  for (const line of lines) {
-    // Match @@map("table_name") or @@map('table_name')
-    const match = line.match(/^@@map\(["']([^"']+)["']\)/);
-    if (match) {
-      return match[1];
-    }
-  }
-
-  return null;
-}
-
-/**
- * Parse model fields from model body
- */
-function parseModelFields(modelBody: string): Record<string, ModelField> {
-  const fields: Record<string, ModelField> = {};
-  const lines = modelBody.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('@@'));
-
-  for (const line of lines) {
-    // Skip relation fields and index definitions
-    if (line.startsWith('//') || line.startsWith('@@')) continue;
-
-    // Match field definition: fieldName Type modifiers
-    const fieldMatch = line.match(/^(\w+)\s+(\w+)(\?|\[\])?\s*(.*)?$/);
-    if (fieldMatch) {
-      const [, fieldName, fieldType, modifier, attributes] = fieldMatch;
-
-      // Determine if it's a relation field (starts with uppercase)
-      const isRelation = fieldType[0] === fieldType[0].toUpperCase() &&
-                        !['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Decimal', 'Json', 'Bytes'].includes(fieldType);
-
-      fields[fieldName] = {
-        type: fieldType,
-        optional: modifier === '?',
-        isArray: modifier === '[]',
-        isRelation: isRelation,
-        attributes: attributes || ''
-      };
-    }
-  }
-
-  return fields;
-}
-
-/**
- * Parse model relations
- */
-function parseModelRelations(modelBody: string): ModelRelation[] {
-  const relations: ModelRelation[] = [];
-  const lines = modelBody.split('\n').map(line => line.trim()).filter(line => line);
-
-  for (const line of lines) {
-    if (line.startsWith('//') || line.startsWith('@@')) continue;
-
-    const fieldMatch = line.match(/^(\w+)\s+(\w+)(\?|\[\])?\s*(.*)?$/);
-    if (fieldMatch) {
-      const [, fieldName, fieldType, modifier] = fieldMatch;
-
-      // Check if it's a relation (not a Prisma scalar type)
-      const scalarTypes = ['String', 'Int', 'Float', 'Boolean', 'DateTime', 'Decimal', 'Json', 'Bytes', 'BigInt'];
-      const isRelation = !scalarTypes.includes(fieldType);
-
-      if (isRelation) {
-        relations.push({
-          name: fieldName,
-          type: fieldType,
-          isArray: modifier === '[]',
-          optional: modifier === '?'
-        });
-      }
-    }
-  }
-
-  return relations;
 }
 
 /**
@@ -199,7 +157,7 @@ function parseModelRelations(modelBody: string): ModelRelation[] {
  */
 function parseEnumValues(enumBody: string): string[] {
   const values: string[] = [];
-  const lines = enumBody.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('//'));
+  const lines = enumBody.split('\n').map(line => line.trim()).filter(line => line && !line.startsWith('@@'));
 
   for (const line of lines) {
     const valueMatch = line.match(/^(\w+)/);
