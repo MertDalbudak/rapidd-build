@@ -11,8 +11,47 @@ import type { ModelInfo } from '../parsers/types';
 export interface BuildOptions {
   schema: string;
   output: string;
+  /** One model, or several separated by commas */
   model?: string;
   only?: 'model' | 'route' | 'acl';
+  /** Skip `prisma generate` (the client is already up to date) */
+  skipGenerate?: boolean;
+}
+
+/**
+ * Regenerate the Prisma client. The previous client is moved aside rather than deleted
+ * first: if `prisma generate` fails, it is restored — the app keeps a working client —
+ * and the build stops instead of generating code for a schema the client doesn't match.
+ */
+function regeneratePrismaClient(schemaPath: string): void {
+  const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
+  // [^}] keeps the match inside the client generator block
+  const outputMatch = schemaContent.match(/generator\s+client\s*\{[^}]*?output\s*=\s*"([^"]+)"/);
+  const clientDir = outputMatch ? path.resolve(path.dirname(schemaPath), outputMatch[1]) : null;
+  const backupDir = clientDir && fs.existsSync(clientDir) ? `${clientDir}.rapidd-backup` : null;
+  if (clientDir && backupDir) {
+    fs.rmSync(backupDir, { recursive: true, force: true });
+    fs.renameSync(clientDir, backupDir);
+  }
+
+  console.log('\nRunning npx prisma generate...');
+  try {
+    execSync(`npx prisma generate --schema="${schemaPath}"`, {
+      stdio: 'inherit',
+      cwd: path.dirname(schemaPath)
+    });
+  } catch (_error) {
+    if (clientDir && backupDir) {
+      fs.rmSync(clientDir, { recursive: true, force: true });
+      fs.renameSync(backupDir, clientDir);
+      console.error(`Restored the previous Prisma client: ${clientDir}`);
+    }
+    throw new Error('prisma generate failed — fix the error above and run the build again');
+  }
+  if (backupDir) {
+    fs.rmSync(backupDir, { recursive: true, force: true });
+  }
+  console.log('Prisma client generated successfully\n');
 }
 
 /**
@@ -42,27 +81,10 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
     throw new Error(`Prisma schema file not found at: ${schemaPath}`);
   }
 
-  // Clean Prisma client output directory if specified in schema
-  const schemaContent = fs.readFileSync(schemaPath, 'utf-8');
-  const outputMatch = schemaContent.match(/generator\s+client\s*\{[\s\S]*?output\s*=\s*"([^"]+)"/);
-  if (outputMatch) {
-    const clientOutputDir = path.resolve(path.dirname(schemaPath), outputMatch[1]);
-    if (fs.existsSync(clientOutputDir)) {
-      fs.rmSync(clientOutputDir, { recursive: true });
-      console.log(`Cleaned Prisma client output: ${clientOutputDir}`);
-    }
-  }
-
-  // Run prisma generate to regenerate client
-  console.log('\nRunning npx prisma generate...');
-  try {
-    execSync(`npx prisma generate --schema="${schemaPath}"`, {
-      stdio: 'inherit',
-      cwd: path.dirname(schemaPath)
-    });
-    console.log('Prisma client generated successfully\n');
-  } catch (_error) {
-    console.warn('Warning: Failed to generate Prisma client\n');
+  if (options.skipGenerate) {
+    console.log('Skipped prisma generate (--skip-generate)');
+  } else {
+    regeneratePrismaClient(schemaPath);
   }
 
   // Try to use Prisma DMMF first (using @prisma/internals getDMMF)
@@ -85,18 +107,18 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
 
   const { models, enums } = parsedData;
 
-  // Filter models if --model option is provided
+  // Filter models if --model option is provided (one, or several separated by commas)
   let filteredModels = models;
   if (options.model) {
-    const modelName = options.model.toLowerCase();
-    const matchedModel = Object.keys(models).find(m => m.toLowerCase() === modelName);
-
-    if (!matchedModel) {
-      throw new Error(`Model "${options.model}" not found in schema. Available models: ${Object.keys(models).join(', ')}`);
+    filteredModels = {};
+    for (const requested of options.model.split(',').map((m) => m.trim()).filter(Boolean)) {
+      const matchedModel = Object.keys(models).find(m => m.toLowerCase() === requested.toLowerCase());
+      if (!matchedModel) {
+        throw new Error(`Model "${requested}" not found in schema. Available models: ${Object.keys(models).join(', ')}`);
+      }
+      filteredModels[matchedModel] = models[matchedModel];
     }
-
-    filteredModels = { [matchedModel]: models[matchedModel] };
-    console.log(`Filtering to model: ${matchedModel}`);
+    console.log(`Filtering to model(s): ${Object.keys(filteredModels).join(', ')}`);
   }
 
   console.log(`Found ${Object.keys(models).length} models${options.model ? ` (generating ${Object.keys(filteredModels).length})` : ''}`);
@@ -120,7 +142,7 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
 
   // Generate ACL configuration
   if (shouldGenerate.acl) {
-    generateACL(filteredModels, aclPath);
+    generateACL(filteredModels, aclPath, path.join(baseDir, 'config', 'acl.json'));
     generateUserConfig(userConfigPath);
   }
 

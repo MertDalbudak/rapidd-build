@@ -14,63 +14,28 @@ function toClassName(modelName: string): string {
 }
 
 /**
- * Generate a single model file (TypeScript)
+ * Generate a single model file (TypeScript).
+ * The CRUD methods are inherited from Model — re-declaring them here only froze old
+ * signatures into every app (e.g. a delete() that dropped its options).
  */
 export function generateModelFile(modelName: string, _modelInfo: ModelInfo): string {
   const className = toClassName(modelName);
 
   return `import { Model } from '../orm/Model';
 import { QueryBuilder, prisma } from '../orm/QueryBuilder';
-import type { ModelOptions, UpsertManyOptions, UpsertManyResult } from '../types';
+import type { ModelOptions } from '../types';
 
+/**
+ * getMany, get, create, update, upsert, upsertMany, count and delete are inherited from
+ * Model. Override one to customize it for ${className}, e.g.:
+ *
+ *     async create(data: Record<string, any>, options: Record<string, any> = {}): Promise<any> {
+ *         return super.create({ ...data, source: 'api' }, options);
+ *     }
+ */
 export class ${className} extends Model {
     constructor(options?: ModelOptions) {
         super('${modelName}', options);
-    }
-
-    /**
-     * Fetch a single record by primary key
-     */
-    async get(id: string | number | Record<string, any>, include?: string | Record<string, any>, options: Record<string, any> = {}, fields: string | null = null): Promise<any> {
-        return await this._get(id, include, options, fields);
-    }
-
-    /**
-     * Create a new record
-     */
-    async create(data: Record<string, any>, options: Record<string, any> = {}): Promise<any> {
-        return await this._create(data, options);
-    }
-
-    /**
-     * Update an existing record by primary key
-     */
-    async update(id: string | number | Record<string, any>, data: Record<string, any>, options: Record<string, any> = {}): Promise<any> {
-        return await this._update(id, data, options);
-    }
-
-    /**
-     * Create or update a record based on unique key
-     */
-    async upsert(data: Record<string, any>, unique_key: string | string[] = this.primaryKey, options: Record<string, any> = {}): Promise<any> {
-        return await this._upsert(data, unique_key, options);
-    }
-
-    /**
-     * Create or update multiple records based on unique key
-     * Performs atomic batch operations with optional transaction support
-     */
-    async upsertMany(
-        data: Record<string, any>[],
-        unique_key: string | string[] = this.primaryKey,
-        prismaOptions: Record<string, any> = {},
-        options: UpsertManyOptions = {}
-    ): Promise<UpsertManyResult> {
-        return await this._upsertMany(data, unique_key, prismaOptions, options);
-    }
-
-    async delete(id: string | number | Record<string, any>): Promise<Record<string, unknown>> {
-        return await this._delete(id);
     }
 
     static override QueryBuilder = new QueryBuilder('${modelName}');
