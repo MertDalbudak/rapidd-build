@@ -6,7 +6,7 @@ Code generator that transforms Prisma schemas into Fastify CRUD APIs with TypeSc
 
 - **Automatic CRUD API Generation** - Creates Fastify routes from Prisma models (TypeScript)
 - **Model Generation** - Creates TypeScript CRUD model classes
-- **ACL Generation** - Generates default Access Control Layer config
+- **Access Rules** - Default access rules per model in `config/acl.json` (edit them in the Rapidd setup wizard)
 - **Selective Generation** - Update only specific models or components
 
 ## Requirements
@@ -30,8 +30,9 @@ npx rapidd build
 # Generate in specific directory
 npx rapidd build --output ./generated
 
-# Generate only specific model
+# Generate only specific models
 npx rapidd build --model user
+npx rapidd build --model user,post
 
 # Generate only specific component
 npx rapidd build --only model
@@ -40,6 +41,9 @@ npx rapidd build --only acl
 
 # Combine model and component filters
 npx rapidd build --model account --only route
+
+# Code only — the Prisma client is up to date
+npx rapidd build --skip-generate
 ```
 
 ## CLI Options
@@ -48,20 +52,23 @@ npx rapidd build --model account --only route
 |--------|-------------|---------|
 | `-o, --output <path>` | Output directory | `./` |
 | `-s, --schema <path>` | Prisma schema file | `./prisma/schema.prisma` |
-| `-m, --model <name>` | Generate/update only specific model | All models |
+| `-m, --model <names>` | Generate/update only these models, comma-separated | All models |
 | `--only <component>` | Generate only: `model`, `route`, or `acl` | All components |
+| `--skip-generate` | Do not run `prisma generate` first | Generate |
 
 ## Generated Structure
 
 ```
 ./
+├── config/
+│   └── acl.json          access rules per model and role
 ├── src/
 │   ├── models/
 │   │   ├── User.ts
 │   │   ├── Post.ts
 │   │   └── ...
 │   └── config/
-│       └── acl.ts
+│       └── acl.ts        access control in code (overrides the rules of a model)
 └── routes/
     └── api/
         └── v1/
@@ -114,6 +121,7 @@ const usersRoutes: FastifyPluginAsync = async (fastify) => {
     // Ids go to the model as strings — it parses them by the key's type
     // (a non-numeric id for an Int key is a 400 invalid_id; composite keys: "a~b")
     fastify.get('/:id', async (request, reply) => { ... });
+    // POST and PATCH respond with the record; ?include= adds relations, as on reads
     fastify.post('/', async (request, reply) => { ... });
     fastify.patch('/:id', async (request, reply) => { ... });
     fastify.delete('/:id', async (request, reply) => { ... });
@@ -131,32 +139,42 @@ narrow it), single records through the composite key.
 > they listed every parent's rows. Updating `@rapidd/core` fixes them; regenerating (delete the
 > `_*.ts` file, then `npx rapidd build --only route`) gives the current version.
 
-### ACL
+> Routes generated before this version don't pass `?include=` on POST and PATCH. With
+> `@rapidd/core` 3.0 their responses are the record alone; regenerate them (delete the file, then
+> `npx rapidd build --only route`) to accept `?include=` on writes.
+
+### Access rules
+
+`config/acl.json` gets default rules for every model it has none for — every signed-in user may
+create, read, update and delete; credential columns are hidden:
+
+```json
+{
+    "models": {
+        "users": {
+            "create": { "*": true },
+            "read": { "*": "all" },
+            "update": { "*": "all" },
+            "delete": { "*": "all" },
+            "hide": { "*": ["password"] }
+        }
+    }
+}
+```
+
+Tighten them in the Rapidd setup wizard (Access control) or by hand — per role (`"*"` covers
+every role without its own entry): `"all"`, `"none"` or `{ "where": { "owner_id": "$user.id" } }`
+for rows, field lists for `hide` and `write`. `@rapidd/core` applies the rules on its own.
+
+`src/config/acl.ts` is for access control in code: an entry there takes its model over.
 
 ```typescript
 // src/config/acl.ts
-import type { AclConfig, RapiddUser } from '../types';
+import type { AclConfig } from '../types';
 
 const acl: AclConfig = {
     model: {
-        users: {
-            canCreate(_user: RapiddUser): boolean {
-                return true;
-            },
-            getAccessFilter(_user: RapiddUser): Record<string, unknown> | boolean {
-                return {};
-            },
-            getUpdateFilter(_user: RapiddUser): Record<string, unknown> | boolean | false {
-                return {};
-            },
-            getDeleteFilter(_user: RapiddUser): Record<string, unknown> | boolean | false {
-                return {};
-            },
-            getOmitFields(_user: RapiddUser): string[] {
-                return [];
-            },
-        },
-        // ... other models
+        // posts: { getAccessFilter: (user) => user.role === 'admin' ? true : { author_id: user.id } },
     },
 };
 
@@ -165,9 +183,12 @@ export default acl;
 
 ## Regeneration and existing files
 
-- Models, routes, `src/config/user.ts` and a non-empty `src/config/acl.ts` are never overwritten —
-  they are your code. For an existing `acl.ts`, the build lists models without an entry (they fall
-  back to `ACL_DEFAULT`).
+- Default rules hide credential columns (password hashes, secrets, tokens, API keys) from
+  responses — they stay writable.
+- `config/acl.json` only gains rules for models it has none for; existing rules are never changed,
+  and a file that is not valid JSON is left alone.
+- Models, routes, `src/config/user.ts` and `src/config/acl.ts` are never overwritten — they are your
+  code.
 - The Prisma client is regenerated first. The previous client is kept until `prisma generate`
   succeeds; if it fails, it is restored and the build stops with a non-zero exit code.
 - The schema is read through Prisma's DMMF (`@prisma/internals`); a built-in parser is the
@@ -175,10 +196,11 @@ export default acl;
 
 ## Selective Generation
 
-### Update Single Model
+### Update Some Models
 
 ```bash
 npx rapidd build --model account
+npx rapidd build --model account,invoice
 ```
 
 ### Update Single Component

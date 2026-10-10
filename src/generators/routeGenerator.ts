@@ -161,7 +161,10 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
  * precision past 2^53 for BigInt keys).
  */
 function crudHandlers(className: string): string {
-  return `    fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
+  return `    // Writes respond with the record; ?include= adds relations, as on reads
+    const writeOptions = (request: FastifyRequest) => ({ include: (request.query as { include?: string }).include });
+
+    fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const results = await request.model!.getMany(request.parseListQuery());
         return reply.sendList(results.data, results.meta);
     });
@@ -175,13 +178,13 @@ function crudHandlers(className: string): string {
 
     fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const payload = request.body as Record<string, unknown>;
-        return reply.code(201).send(await request.model!.create(payload));
+        return reply.code(201).send(await request.model!.create(payload, writeOptions(request)));
     });
 
     fastify.patch('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
         const { id } = request.params as { id: string };
         const payload = request.body as Record<string, unknown>;
-        return reply.send(await request.model!.update(id, payload));
+        return reply.send(await request.model!.update(id, payload, writeOptions(request)));
     });
 
     fastify.delete('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
@@ -276,6 +279,9 @@ ${sessionHook(className)}
         ${fkFieldToParent}: request.model!.parseKey('${fkFieldToParent}', (request.params as { id: string }).id),
     });
 
+    // Writes respond with the record; ?include= adds relations, as on reads
+    const writeOptions = (request: FastifyRequest) => ({ include: (request.query as { include?: string }).include });
+
     fastify.get('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const results = await request.model!.getMany({ ...request.parseListQuery(), where: parentKey(request) });
         return reply.sendList(results.data, results.meta);
@@ -289,13 +295,13 @@ ${sessionHook(className)}
 
     fastify.post('/', async (request: FastifyRequest, reply: FastifyReply) => {
         const payload = { ...(request.body as Record<string, unknown>), ...parentKey(request) };
-        return reply.code(201).send(await request.model!.create(payload));
+        return reply.code(201).send(await request.model!.create(payload, writeOptions(request)));
     });
 
     fastify.patch('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
         const { subId } = request.params as { subId: string };
         const payload = request.body as Record<string, unknown>;
-        return reply.send(await request.model!.update({ ...parentKey(request), ${otherFkField}: subId }, payload));
+        return reply.send(await request.model!.update({ ...parentKey(request), ${otherFkField}: subId }, payload, writeOptions(request)));
     });
 
     fastify.delete('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {

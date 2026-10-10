@@ -11,8 +11,11 @@ import type { ModelInfo } from '../parsers/types';
 export interface BuildOptions {
   schema: string;
   output: string;
+  /** One model, or several separated by commas */
   model?: string;
   only?: 'model' | 'route' | 'acl';
+  /** Skip `prisma generate` (the client is already up to date) */
+  skipGenerate?: boolean;
 }
 
 /**
@@ -78,7 +81,11 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
     throw new Error(`Prisma schema file not found at: ${schemaPath}`);
   }
 
-  regeneratePrismaClient(schemaPath);
+  if (options.skipGenerate) {
+    console.log('Skipped prisma generate (--skip-generate)');
+  } else {
+    regeneratePrismaClient(schemaPath);
+  }
 
   // Try to use Prisma DMMF first (using @prisma/internals getDMMF)
   let parsedData: { models: Record<string, ModelInfo>; enums: any } | null = null;
@@ -100,18 +107,18 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
 
   const { models, enums } = parsedData;
 
-  // Filter models if --model option is provided
+  // Filter models if --model option is provided (one, or several separated by commas)
   let filteredModels = models;
   if (options.model) {
-    const modelName = options.model.toLowerCase();
-    const matchedModel = Object.keys(models).find(m => m.toLowerCase() === modelName);
-
-    if (!matchedModel) {
-      throw new Error(`Model "${options.model}" not found in schema. Available models: ${Object.keys(models).join(', ')}`);
+    filteredModels = {};
+    for (const requested of options.model.split(',').map((m) => m.trim()).filter(Boolean)) {
+      const matchedModel = Object.keys(models).find(m => m.toLowerCase() === requested.toLowerCase());
+      if (!matchedModel) {
+        throw new Error(`Model "${requested}" not found in schema. Available models: ${Object.keys(models).join(', ')}`);
+      }
+      filteredModels[matchedModel] = models[matchedModel];
     }
-
-    filteredModels = { [matchedModel]: models[matchedModel] };
-    console.log(`Filtering to model: ${matchedModel}`);
+    console.log(`Filtering to model(s): ${Object.keys(filteredModels).join(', ')}`);
   }
 
   console.log(`Found ${Object.keys(models).length} models${options.model ? ` (generating ${Object.keys(filteredModels).length})` : ''}`);
@@ -135,7 +142,7 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
 
   // Generate ACL configuration
   if (shouldGenerate.acl) {
-    generateACL(filteredModels, aclPath);
+    generateACL(filteredModels, aclPath, path.join(baseDir, 'config', 'acl.json'));
     generateUserConfig(userConfigPath);
   }
 
