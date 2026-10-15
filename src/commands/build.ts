@@ -1,10 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
+import { parseEnv } from 'util';
 import { parsePrismaSchema, parsePrismaDMMF } from '../parsers/prismaParser';
-import { generateAllModels } from '../generators/modelGenerator';
 import { generateAllRoutes } from '../generators/routeGenerator';
 import { generateACL } from '../generators/aclGenerator';
+import { generateAllModels, assertDistinctClassNames } from '../generators/modelGenerator';
 import { generateUserConfig } from '../generators/userConfigGenerator';
 import type { ModelInfo } from '../parsers/types';
 
@@ -16,6 +17,20 @@ export interface BuildOptions {
   only?: 'model' | 'route' | 'acl';
   /** Skip `prisma generate` (the client is already up to date) */
   skipGenerate?: boolean;
+}
+
+/**
+ * The app's environment as @rapidd/core loads it: its env file (ENV_FILE, else .env) under the
+ * process's own variables — DB_USER_TABLE and DB_USER_PASSWORD_FIELD usually live there
+ */
+function appEnv(): Record<string, string | undefined> {
+  let fromFile: Record<string, string | undefined> = {};
+  try {
+    fromFile = parseEnv(fs.readFileSync(path.resolve(process.env.ENV_FILE || '.env'), 'utf-8'));
+  } catch {
+    // No env file
+  }
+  return { ...fromFile, ...process.env };
 }
 
 /**
@@ -106,6 +121,7 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
   }
 
   const { models, enums } = parsedData;
+  assertDistinctClassNames(models);
 
   // Filter models if --model option is provided (one, or several separated by commas)
   let filteredModels = models;
@@ -142,7 +158,8 @@ export async function buildModels(options: BuildOptions): Promise<{ models: Reco
 
   // Generate ACL configuration
   if (shouldGenerate.acl) {
-    generateACL(filteredModels, aclPath, path.join(baseDir, 'config', 'acl.json'));
+    // The first acl.ts covers every model, whichever ones this build was asked for
+    generateACL(models, aclPath, appEnv());
     generateUserConfig(userConfigPath);
   }
 

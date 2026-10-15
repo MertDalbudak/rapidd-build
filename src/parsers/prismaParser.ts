@@ -78,6 +78,29 @@ function parseRelationAttribute(attributes: string): Pick<ModelRelation, 'relati
  * A field is a relation only when its type is a model of the schema — enums and scalars
  * like BigInt are not.
  */
+/**
+ * The fields that identify a row, as @rapidd/core finds them — @@id / @id, or without one the
+ * first unique of required fields: a @unique field, else a @@unique (Prisma requires one).
+ * Returned when it has several fields (routes then take "a~b~c"), else null.
+ */
+export function compositeKeyOf(fields: Record<string, ModelField>, primaryKey: string[] | null, uniqueFields: string[][]): string[] | null {
+  let key: string[] = [];
+  const id = Object.entries(fields).find(([, field]) => field.isId);
+  if (primaryKey && primaryKey.length > 0) {
+    key = primaryKey;
+  } else if (id) {
+    key = [id[0]];
+  } else {
+    const required = (names: string[]) => names.every((name) => fields[name] && !fields[name].optional);
+    const candidates = [
+      ...Object.entries(fields).filter(([, field]) => !field.isRelation && field.isUnique).map(([name]) => [name]),
+      ...uniqueFields,
+    ];
+    key = candidates.find(required) ?? [];
+  }
+  return key.length > 1 ? [...key] : null;
+}
+
 export function parsePrismaSchema(schemaPath: string): ParsedSchema {
   const schemaContent = stripComments(fs.readFileSync(schemaPath, 'utf-8'));
 
@@ -143,7 +166,7 @@ export function parsePrismaSchema(schemaPath: string): ParsedSchema {
       name,
       fields,
       relations,
-      compositeKey: compositeKey && compositeKey.length > 1 ? compositeKey : null,
+      compositeKey: compositeKeyOf(fields, compositeKey, uniqueFields),
       uniqueFields,
       dbName: dbName || name.toLowerCase(),
     };
@@ -186,10 +209,6 @@ export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema 
     const models: Record<string, ModelInfo> = {};
 
     for (const model of dmmf.datamodel.models) {
-      // Extract composite key if present
-      const compositeKey = model.primaryKey && model.primaryKey.fields && model.primaryKey.fields.length > 1
-        ? model.primaryKey.fields
-        : null;
 
       // Extract compound unique constraints
       const uniqueFields: string[][] = Array.isArray(model.uniqueFields) ? model.uniqueFields : [];
@@ -198,7 +217,7 @@ export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema 
         name: model.name,
         fields: {},
         relations: [],
-        compositeKey,
+        compositeKey: null, // derived once the fields are read (compositeKeyOf)
         uniqueFields,
         dbName: model.dbName || model.name.toLowerCase() // Use dbName from DMMF or default to lowercase
       };
@@ -234,6 +253,7 @@ export async function parsePrismaDMMF(schemaPath: string): Promise<ParsedSchema 
           models[model.name].fields[field.name].kind = field.kind;
         }
       }
+      models[model.name].compositeKey = compositeKeyOf(models[model.name].fields, model.primaryKey?.fields ?? null, uniqueFields);
     }
 
     return { models, enums: dmmf.datamodel.enums };

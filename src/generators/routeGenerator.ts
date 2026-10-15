@@ -27,9 +27,9 @@ interface JunctionInfo {
 
 /**
  * Detect if a model is a junction (n:m) table.
- * A junction table has a composite primary key (@@id) with exactly 2 fields,
- * where each field maps to a parent relation.
- * Models with 3+ composite key fields are skipped entirely (no routes generated).
+ * A junction table has a composite key with exactly 2 fields, each a foreign key to a
+ * parent: it is served under its parents. A key of 3 or more fields is a route of its own
+ * (/:id = "a~b~c").
  */
 function detectJunctionTable(_modelName: string, modelInfo: ModelInfo): JunctionInfo {
   if (!modelInfo.compositeKey || modelInfo.compositeKey.length !== 2) {
@@ -160,7 +160,7 @@ function buildJunctionMap(models: Record<string, ModelInfo>): JunctionMap {
  * non-numeric id for an Int key is a 400 invalid_id (Number() made it NaN, and lost
  * precision past 2^53 for BigInt keys).
  */
-function crudHandlers(className: string): string {
+function crudHandlers(): string {
   return `    // Writes respond with the record; ?include= adds relations, as on reads
     const writeOptions = (request: FastifyRequest) => ({ include: (request.query as { include?: string }).include });
 
@@ -190,7 +190,7 @@ function crudHandlers(className: string): string {
     fastify.delete('/:id', async (request: FastifyRequest, reply: FastifyReply) => {
         const { id } = request.params as { id: string };
         await request.model!.delete(id);
-        return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
+        return reply.sendResponse(200, 'object_deleted_successfully', { modelName: request.model!.name });
     });`;
 }
 
@@ -214,7 +214,7 @@ import { ${className} } from '${importPathPrefix}/models/${className}';
 const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
 ${sessionHook(className)}
 
-${crudHandlers(className)}
+${crudHandlers()}
 };
 
 export default ${modelName}Routes;
@@ -224,28 +224,33 @@ export default ${modelName}Routes;
 /**
  * Generate Fastify route for a parent model that has sub-routes (TypeScript)
  */
-export function generateParentRouteFile(modelName: string, _modelInfo: ModelInfo, subRoutes: SubRouteInfo[]): string {
+/** Marks a parent route that registers the sub-route files next to it by itself */
+const SUB_ROUTE_DISCOVERY = 'every _<name> file next to this one';
+
+export function generateParentRouteFile(modelName: string, _modelInfo: ModelInfo, _subRoutes: SubRouteInfo[]): string {
   const className = toClassName(modelName);
   const importPath = '../../../../src';
 
-  const subRouteImports = subRoutes.map(sr =>
-    `import ${sr.subRouteName}Routes from './_${sr.subRouteName}';`
-  ).join('\n');
-
-  const subRouteRegistrations = subRoutes.map(sr =>
-    `    fastify.register(${sr.subRouteName}Routes, { prefix: '/:id/${sr.subRouteName}' });`
-  ).join('\n');
-
-  return `import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
+  return `import * as fs from 'fs';
+import * as path from 'path';
+import { FastifyPluginAsync, FastifyRequest, FastifyReply } from 'fastify';
 import { ${className} } from '${importPath}/models/${className}';
-${subRouteImports}
 
 const ${modelName}Routes: FastifyPluginAsync = async (fastify) => {
 ${sessionHook(className)}
 
-${subRouteRegistrations}
+    // Join-table sub-routes: ${SUB_ROUTE_DISCOVERY}, served under /:id/<name> — one
+    // generated later for a new join table is picked up without editing this file
+    const ext = path.extname(__filename);
+    for (const file of fs.readdirSync(__dirname).sort()) {
+        const match = /^_(\\w+)\\.(ts|js)$/.exec(file);
+        if (!match || \`.\${match[2]}\` !== ext) continue;
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const subRoute = require(path.join(__dirname, file));
+        await fastify.register(subRoute.default ?? subRoute, { prefix: \`/:id/\${match[1]}\` });
+    }
 
-${crudHandlers(className)}
+${crudHandlers()}
 };
 
 export default ${modelName}Routes;
@@ -307,7 +312,7 @@ ${sessionHook(className)}
     fastify.delete('/:subId', async (request: FastifyRequest, reply: FastifyReply) => {
         const { subId } = request.params as { subId: string };
         await request.model!.delete({ ...parentKey(request), ${otherFkField}: subId });
-        return reply.sendResponse(200, 'object_deleted_successfully', { modelName: '${className}' });
+        return reply.sendResponse(200, 'object_deleted_successfully', { modelName: request.model!.name });
     });
 };
 
@@ -335,12 +340,6 @@ export function generateAllRoutes(
   const { junctionModels, parentSubRoutes } = buildJunctionMap(allModels ?? models);
 
   for (const [modelName, modelInfo] of Object.entries(models)) {
-    // Skip models with 3+ composite key fields – no clean RESTful representation
-    if (modelInfo.compositeKey && modelInfo.compositeKey.length > 2) {
-      console.log(`Skipped route (3+ composite key): ${modelName}`);
-      continue;
-    }
-
     // Skip junction tables – they become sub-routes, not standalone files
     if (junctionModels.has(modelName)) {
       console.log(`Skipped route (junction table): ${modelName}`);
@@ -354,19 +353,19 @@ export function generateAllRoutes(
       const parentDir = path.join(routesDir, modelName);
       const indexPath = path.join(parentDir, 'index.ts');
 
-      // If a legacy flat file exists, skip entirely (never overwrite)
-      const legacyFlatPath = path.join(routesDir, `${modelName}.ts`);
-      if (fs.existsSync(legacyFlatPath)) {
-        console.log(`Skipped route (legacy flat file exists): ${modelName}.ts`);
-        continue;
-      }
+      // A parent generated as a single file (before it had join tables) is the app's code:
+      // the sub-routes go next to it, into the directory, and are registered by hand
+      const flatPath = path.join(routesDir, `${modelName}.ts`);
+      const flat = fs.existsSync(flatPath);
 
       if (!fs.existsSync(parentDir)) {
         fs.mkdirSync(parentDir, { recursive: true });
       }
 
       // Generate parent index.ts
-      if (fs.existsSync(indexPath)) {
+      if (flat) {
+        console.log(`Skipped route (exists): ${modelName}.ts`);
+      } else if (fs.existsSync(indexPath)) {
         console.log(`Skipped route (exists): ${modelName}/index.ts`);
       } else {
         const parentCode = generateParentRouteFile(modelName, modelInfo, subRoutes);
@@ -390,6 +389,18 @@ export function generateAllRoutes(
         );
         fs.writeFileSync(subRoutePath, subRouteCode);
         console.log(`Generated sub-route: ${modelName}/_${sr.subRouteName}.ts`);
+      }
+
+      // A parent route that doesn't find its sub-routes itself must register each one
+      const parentPath = flat ? flatPath : indexPath;
+      const parentSource = fs.readFileSync(parentPath, 'utf-8');
+      if (!parentSource.includes(SUB_ROUTE_DISCOVERY)) {
+        for (const sr of subRoutes) {
+          if (parentSource.includes(`_${sr.subRouteName}'`)) continue;
+          const from = flat ? `./${modelName}/_${sr.subRouteName}` : `./_${sr.subRouteName}`;
+          console.log(`Not served yet: register ${modelName}/_${sr.subRouteName}.ts in ${path.relative(routesDir, parentPath)} — `
+            + `fastify.register(require('${from}').default, { prefix: '/:id/${sr.subRouteName}' });`);
+        }
       }
     } else {
       // ── Standalone model → flat file (unchanged behaviour) ──
